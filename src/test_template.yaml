@@ -1,0 +1,104 @@
+tosca_definitions_version: alien_dsl_2_0_0
+
+metadata:
+  template_name: TestDynamicOrchestration
+  template_version: 0.1.0-SNAPSHOT
+  template_author: lexis
+
+description: "Dynamic orchestration test template"
+
+imports:
+  - org.lexis.common.heappe-types:1.0.3
+  - yorc-types:1.1.0
+  - tosca-normative-types:1.0.0-ALIEN20
+  - org.lexis.common.dynamic-orchestration-types:0.1.0
+  - org.lexis.common.ddi-types:0.1.3
+
+topology_template:
+  inputs:
+    token:
+      type: string
+      required: true
+      description: "Access token"
+  node_templates:
+    FirstVM:
+      type: tosca.nodes.Compute
+      requirements:
+        - networkNetworkConnection:
+            type_requirement: network
+            node: Network
+            capability: tosca.capabilities.Connectivity
+            relationship: tosca.relationships.Network
+      capabilities:
+        host:
+          properties:
+            num_cpus: 1
+            mem_size: "5 GB"
+        os:
+          properties:
+            type: linux        
+    SecondVM:
+      type: tosca.nodes.Compute
+      requirements:
+        - networkNetworkConnection:
+            type_requirement: network
+            node: Network
+            capability: tosca.capabilities.Connectivity
+            relationship: tosca.relationships.Network
+      capabilities:
+        host:
+          properties:
+            num_cpus: 2
+            mem_size: "4 GB"
+            disk_size: "21 GB"
+        os:
+          properties:
+            type: linux
+    Network:
+      type: tosca.nodes.Network
+      properties:
+        ip_version: 4
+    SetLocations:
+      type: org.lexis.common.dynamic.orchestration.nodes.SetLocations
+      properties:
+        token: { get_input: token }
+      requirements:
+        - CloudResourceFirstVM:
+            type_requirement: cloud_instance
+            node: SecondVM
+            capability: tosca.capabilities.OperatingSystem
+            relationship: org.lexis.common.dynamic.orchestration.relationships.CloudResource
+        - CloudResourceSecondVM:
+            type_requirement: cloud_instance
+            node: FirstVM
+            capability: tosca.capabilities.OperatingSystem
+            relationship: org.lexis.common.dynamic.orchestration.relationships.CloudResource
+  workflows:
+    install:
+      steps:
+        SetLocations_FirstVM_pre_configure_source:
+          target: SetLocations
+          target_relationship: CloudResourceFirstVM
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: Configure.pre_configure_source
+          on_success:
+            - SetLocations_start
+        SetLocations_SecondVM_pre_configure_source:
+          target: SetLocations
+          target_relationship: CloudResourceSecondVM
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: Configure.pre_configure_source
+          on_success:
+            - SetLocations_start
+        SetLocations_start:
+          target: SetLocations
+          activities:
+            - call_operation: Standard.start
+          on_success:
+            - SetLocations_started
+        SetLocations_started:
+          target: SetLocations
+          activities:
+            - set_state: started

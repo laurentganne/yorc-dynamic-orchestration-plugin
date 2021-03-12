@@ -1,0 +1,142 @@
+tosca_definitions_version: alien_dsl_2_0_0
+
+metadata:
+  template_name: org.lexis.common.dynamic-orchestration-types
+  template_version: 0.1.0
+  template_author: lexis
+
+imports:
+  - org.lexis.common.heappe-types:1.0.3
+  - org.lexis.common.ddi-types:0.1.3
+data_types:
+  org.lexis.common.dynamic.orchestration.types.CloudRequirement:
+    derived_from: tosca.datatypes.Root
+    description: Requirement for a compute instance to allocate on Cloud
+    properties:
+      num_cpus:
+        type: string
+        description: Number of (actual or virtual) CPUs associated with the Compute node.
+        required: false
+      mem_size:
+        type: scalar-unit.size
+        description: Size of memory available to applications running on the Compute node (default unit is MB).
+        required: false
+      disk_size:
+        type: scalar-unit.size
+        description: Size of the local disk available to applications running on the Compute node (default unit is MB).
+        required: false
+      os_type:
+        type: string
+        description: >
+          The Operating System (OS) type.
+          Examples of valid values include:
+          linux, aix, mac, windows, etc.
+        required: false
+      os_distribution:
+        type: string
+        description: >
+          The Operating System (OS) distribution.
+          Examples of valid values for an “type” of “Linux” would include:  debian, fedora, rhel and ubuntu.
+        required: false
+      os_version:
+        type: version
+        description: The Operating System version.
+        required: false
+  org.lexis.common.dynamic.orchestration.types.CloudLocation:
+    derived_from: tosca.datatypes.Root
+    description: Location and properties to use to allocate a compute instance
+    properties:
+      location_name:
+        type: string
+        description: Location where to allocate the compute instance
+        required: false
+      flavor:
+        type: string
+        description: >
+          Openstack compute instance flavor name
+        required: false
+      image_id:
+        type: string
+        description: >
+          Openstack compute instance image ID
+        required: false
+      floatting_ip_pool:
+        type: string
+        description: >
+          Openstack floating IP pool
+        required: false
+      user:
+        type: string
+        description: >
+          User used to connect to the compute instance
+        required: false
+artifact_types:
+  org.lexis.common.dynamic.orchestration.artifacts.Deployment:
+    derived_from: tosca.artifacts.Deployment
+  org.alien4cloud.artifacts.AnsiblePlaybook:
+    derived_from: tosca.artifacts.Root
+node_types:
+  org.lexis.common.dynamic.orchestration.nodes.SetLocations:
+    derived_from: tosca.nodes.Root
+    description: >
+      Set locations of Intrastructures resources nodes to allocate
+    properties:
+      token:
+        description: Access token
+        type: string
+        required: true
+    attributes:
+      cloud_requirements:
+        type: map
+        description: Requirements on cloud instances
+      cloud_locations:
+        type: map
+        description: Locations to use for cloud instances
+    requirements:
+      - cloud_instance:
+          capability: tosca.capabilities.OperatingSystem
+          node: tosca.nodes.Compute
+          relationship: org.lexis.common.dynamic.orchestration.relationships.CloudResource
+          occurrences: [0, UNBOUNDED]
+      - heappe_job:
+          capability: org.lexis.common.heappe.capabilities.HeappeJob
+          node: org.lexis.common.heappe.nodes.Job
+          relationship: org.lexis.common.dynamic.orchestration.relationships.HeappeJob
+          occurrences: [0, UNBOUNDED]
+    interfaces:
+      Standard:
+        start:
+          inputs:
+            TOKEN: { get_property: [SELF, token] }
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook
+relationship_types:
+  org.lexis.common.dynamic.orchestration.relationships.CloudResource:
+    derived_from: tosca.relationships.DependsOn
+    description: >
+      Relationship with a Cloud compute instance
+    valid_target_types: [ tosca.capabilities.OperatingSystem ]
+    interfaces:
+      Configure:
+        pre_configure_source:
+          inputs:
+            NUM_CPUS: { get_property: [TARGET, host, num_cpus] }
+            MEM_SIZE: { get_property: [TARGET, host, mem_size] }
+            DISK_SIZE: { get_property: [TARGET, host, disk_size] }
+            OS_TYPE: { get_property: [TARGET, os, type] }
+            OS_DISTRIBUTION: { get_property: [TARGET, os, distribution] }
+            OS_VERSION: { get_property: [TARGET, os, version] }
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook
+  org.lexis.common.dynamic.orchestration.relationships.OptionalCloudResource:
+    derived_from: org.lexis.common.dynamic.orchestration.relationships.CloudResource
+    description: >
+      Relationship with a Cloud compute instance that can be skipped if no location is available for it
+  org.lexis.common.dynamic.orchestration.relationships.HeappeJob:
+    derived_from: tosca.relationships.DependsOn
+    description: >
+      Relationship with a HEAppE job
+    valid_target_types: [ org.lexis.common.heappe.capabilities.HeappeJob ]
+  # TODO: relationship with a DDI component providing details on a dataset
