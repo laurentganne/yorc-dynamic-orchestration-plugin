@@ -8,9 +8,9 @@ metadata:
 description: "Dynamic orchestration test template"
 
 imports:
-  - org.lexis.common.heappe-types:1.0.3
-  - yorc-types:1.1.0
   - tosca-normative-types:1.0.0-ALIEN20
+  - yorc-openstack-types:3.0.0
+  - org.lexis.common.heappe-types:1.0.3
   - org.lexis.common.dynamic-orchestration-types:0.1.0
   - org.lexis.common.ddi-types:0.1.3
 
@@ -34,8 +34,8 @@ topology_template:
       requirements:
         - networkNetworkConnection:
             type_requirement: network
-            node: Network
-            capability: tosca.capabilities.Connectivity
+            node: FloatingIP1
+            capability: yorc.capabilities.openstack.FIPConnectivity
             relationship: tosca.relationships.Network
       capabilities:
         host:
@@ -50,8 +50,8 @@ topology_template:
       requirements:
         - networkNetworkConnection:
             type_requirement: network
-            node: Network
-            capability: tosca.capabilities.Connectivity
+            node: FloatingIP2
+            capability: yorc.capabilities.openstack.FIPConnectivity
             relationship: tosca.relationships.Network
       capabilities:
         host:
@@ -62,10 +62,10 @@ topology_template:
         os:
           properties:
             type: linux
-    Network:
-      type: tosca.nodes.Network
-      properties:
-        ip_version: 4
+    FloatingIP1:
+      type: yorc.nodes.openstack.FloatingIP
+    FloatingIP2:
+      type: yorc.nodes.openstack.FloatingIP
     SetLocations:
       type: org.lexis.common.dynamic.orchestration.nodes.SetLocations
       properties:
@@ -145,3 +145,15 @@ topology_template:
           target: SetLocations
           activities:
             - set_state: started
+          on_success:
+            - FloatingIP1_install
+        FloatingIP1_install:
+          target: FloatingIP1
+          activities:
+            - delegate: install
+          on_success:
+            - FirstVM_install
+        FirstVM_install:
+          target: FirstVM
+          activities:
+            - delegate: install
