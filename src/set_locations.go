@@ -582,6 +582,8 @@ func (e *SetLocationsExecution) setCloudLocation(ctx context.Context, nodeName s
 	}
 	if floatingIPNodeName == "" {
 		// No associated floating IP pool to change, locations changes are done now
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+			"No floating IP associated to compute instance %s in deployment %s", nodeName, e.DeploymentID)
 		return err
 	}
 
@@ -606,6 +608,9 @@ func (e *SetLocationsExecution) setCloudLocation(ctx context.Context, nodeName s
 	if err != nil {
 		return err
 	}
+
+	events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+		"Floating IP pool is %s for %s in deployment %s", location.FloatingIPPool, floatingIPNodeName, e.DeploymentID)
 
 	return err
 }
