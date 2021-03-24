@@ -374,7 +374,7 @@ func (e *SetLocationsExecution) getDatasetRequirementFromEnvInputs() (DatasetReq
 				return req, errors.Wrapf(err, "Failed to unmarshal %s", envInput.Value)
 			}
 			req.Locations = sliceVal
-		case "MEM_SIZE":
+		case "SIZE":
 			req.Size = envInput.Value
 		case "NUMBER_OF_FILES":
 			req.NumberOfFiles = envInput.Value
