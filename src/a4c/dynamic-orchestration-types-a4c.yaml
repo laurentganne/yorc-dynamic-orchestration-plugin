@@ -42,6 +42,28 @@ data_types:
         type: version
         description: The Operating System version.
         required: false
+  org.lexis.common.dynamic.orchestration.types.DatasetRequirement:
+    derived_from: tosca.datatypes.Root
+    description: Requirement from an input dataset to transfer
+    properties:
+      locations:
+        type: list
+        entry_schema:
+          type: string
+        description: Locations where the dataset is available
+        required: true
+      number_of_files:
+        type: integer
+        description: Number of files in the dataset
+        required: true
+      number_of_small_files:
+        type: integer
+        description: Number of small files in the dataset (<= 32MB)
+        required: true
+      size:
+        type: integer
+        description: Size of the dataset in bytes.
+        required: true
   org.lexis.common.dynamic.orchestration.types.CloudLocation:
     derived_from: tosca.datatypes.Root
     description: Location and properties to use to allocate a compute instance
@@ -89,6 +111,9 @@ node_types:
       cloud_requirements:
         type: map
         description: Requirements on cloud instances
+      dataset_requirements:
+        type: map
+        description: Requirements from input datasets
       cloud_locations:
         type: map
         description: Locations to use for cloud instances
@@ -102,6 +127,11 @@ node_types:
           capability: org.lexis.common.heappe.capabilities.HeappeJob
           node: org.lexis.common.heappe.nodes.Job
           relationship: org.lexis.common.dynamic.orchestration.relationships.HeappeJob
+          occurrences: [0, UNBOUNDED]
+      - input_dataset:
+          capability: org.lexis.common.ddi.capabilities.DatasetInfo
+          node: org.lexis.common.ddi.nodes.pub.GetDatasetInfo
+          relationship: org.lexis.common.dynamic.orchestration.relationships.Dataset
           occurrences: [0, UNBOUNDED]
     interfaces:
       Standard:
@@ -139,4 +169,19 @@ relationship_types:
     description: >
       Relationship with a HEAppE job
     valid_target_types: [ org.lexis.common.heappe.capabilities.HeappeJob ]
-  # TODO: relationship with a DDI component providing details on a dataset
+  org.lexis.common.dynamic.orchestration.relationships.Dataset:
+    derived_from: tosca.relationships.DependsOn
+    description: >
+      Relationship with an input dataset
+    valid_target_types: [ org.lexis.common.ddi.capabilities.DatasetInfo ]
+    interfaces:
+      Configure:
+        pre_configure_source:
+          inputs:
+            LOCATIONS: { get_attribute: [TARGET, dataset_info, locations] }
+            SIZE: { get_attribute: [TARGET, dataset_info, size] }
+            NUMBER_OF_FILES: { get_attribute: [TARGET, dataset_info, number_of_files] }
+            NUMBER_OF_SMALL_FILES: { get_attribute: [TARGET, dataset_info, number_of_small_files] }
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook

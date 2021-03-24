@@ -20,7 +20,15 @@ topology_template:
       type: string
       required: true
       description: "Access token"
+    input_dataset_path:
+      type: string
+      description: DDI path to input dataset
   node_templates:
+    InputDatasetInfoJob:
+      type: org.lexis.common.ddi.nodes.GetDDIDatasetInfoJob
+      properties:
+        token: {get_input: token}
+        dataset_path: {get_input: input_dataset_path}
     FirstVM:
       type: tosca.nodes.Compute
       requirements:
@@ -73,9 +81,34 @@ topology_template:
             node: FirstVM
             capability: tosca.capabilities.OperatingSystem
             relationship: org.lexis.common.dynamic.orchestration.relationships.CloudResource
+        - InputDataset:
+            type_requirement: input_dataset
+            node: InputDatasetInfoJob
+            capability: org.lexis.common.ddi.capabilities.DatasetInfo
+            relationship: org.lexis.common.dynamic.orchestration.relationships.Dataset
   workflows:
     install:
       steps:
+        InputDatasetInfoJob_submit:
+          target: InputDatasetInfoJob
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.submit
+          on_success:
+            - InputDatasetInfoJob_run
+        InputDatasetInfoJob_run:
+          target: InputDatasetInfoJob
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.run
+          on_success:
+            - InputDatasetInfoJob_executed
+        InputDatasetInfoJob_executed:
+          target: InputDatasetInfoJob
+          activities:
+            - set_state: executed
+          on_success:
+            - SetLocations_FirstVM_pre_configure_source
         SetLocations_FirstVM_pre_configure_source:
           target: SetLocations
           target_relationship: CloudResourceFirstVM
@@ -83,10 +116,20 @@ topology_template:
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
+            - SetLocations_SecondVM_pre_configure_source
             - SetLocations_start
         SetLocations_SecondVM_pre_configure_source:
           target: SetLocations
           target_relationship: CloudResourceSecondVM
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: Configure.pre_configure_source
+          on_success:
+            - SetLocations_DatasetInfo_pre_configure_source
+            - SetLocations_start
+        SetLocations_DatasetInfo_pre_configure_source:
+          target: SetLocations
+          target_relationship: InputDataset
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source

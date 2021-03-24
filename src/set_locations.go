@@ -40,8 +40,11 @@ import (
 const (
 	cloudTargetRelationship         = "org.lexis.common.dynamic.orchestration.relationships.CloudResource"
 	optionalCloudTargetRelationship = "org.lexis.common.dynamic.orchestration.relationships.OptionalCloudResource"
+	datasetTargetRelationship       = "org.lexis.common.dynamic.orchestration.relationships.Dataset"
 	fipConnectivityCapability       = "yorc.capabilities.openstack.FIPConnectivity"
-	cloudReqConsulAttrbute          = "cloud_requirements"
+	cloudReqConsulAttribute         = "cloud_requirements"
+	cloudLocationsConsulAttribute   = "cloud_locations"
+	datasetReqConsulAttribute       = "input_dataset"
 )
 
 // SetLocationsExecution holds Locations computation properties
@@ -75,6 +78,14 @@ type CloudLocation struct {
 	ImageID        string `json:"image_id"`
 	FloatingIPPool string `json:"floating_ip_pool"`
 	User           string `json:"user"`
+}
+
+// DatasetRequirement holds an input requirements
+type DatasetRequirement struct {
+	Locations          []string `json:"locations"`
+	NumberOfFiles      string   `json:"number_of_files"`
+	NumberOfSmallFiles string   `json:"number_of_small_files"`
+	Size               string   `json:"size"`
 }
 
 // ExecuteAsync is not supported here
@@ -133,19 +144,23 @@ func (e *SetLocationsExecution) setLocations(ctx context.Context) error {
 	var err error
 
 	// Get requirements
-	requirements, err := e.getStoredCloudRequirements(ctx)
+	cloudReqs, err := e.getStoredCloudRequirements(ctx)
+	if err != nil {
+		return err
+	}
+	datasetReqs, err := e.getStoredDatasetRequirements(ctx)
 	if err != nil {
 		return err
 	}
 
 	// Compute locations fulfilling these requirements
-	locations, err := e.computeLocations(ctx, requirements)
+	locations, err := e.computeLocations(ctx, cloudReqs, datasetReqs)
 	if err != nil {
 		return err
 	}
 
 	// Assign locations to instances
-	err = e.assignCloudLocations(ctx, requirements, locations)
+	err = e.assignCloudLocations(ctx, cloudReqs, locations)
 
 	return err
 }
@@ -166,6 +181,14 @@ func (e *SetLocationsExecution) addTarget(ctx context.Context) error {
 		return e.addCloudTarget(ctx, isOptionalTarget)
 	}
 
+	isDatasetTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
+		e.Operation.ImplementedInType, datasetTargetRelationship)
+	if err != nil {
+		return err
+	}
+	if isDatasetTarget {
+		return e.addDatasetTarget(ctx)
+	}
 	return err
 }
 
@@ -198,7 +221,7 @@ func (e *SetLocationsExecution) addCloudTarget(ctx context.Context, optional boo
 
 	// Store new collected requirements value
 	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
-		cloudReqConsulAttrbute, cloudreq)
+		cloudReqConsulAttribute, cloudreq)
 	if err != nil {
 		err = errors.Wrapf(err, "Failed to store cloud requirement details for deployment %s node %s",
 			e.DeploymentID, e.NodeName)
@@ -250,7 +273,7 @@ func (e *SetLocationsExecution) getStoredCloudRequirements(ctx context.Context) 
 	}
 
 	// Get already collected requirements
-	attr, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, ids[0], cloudReqConsulAttrbute)
+	attr, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, ids[0], cloudReqConsulAttribute)
 	if err != nil {
 		return cloudreq, err
 	}
@@ -267,31 +290,200 @@ func (e *SetLocationsExecution) getStoredCloudRequirements(ctx context.Context) 
 	return cloudreq, err
 }
 
-func (e *SetLocationsExecution) computeLocations(ctx context.Context, requirements map[string]CloudRequirement) (map[string]CloudLocation, error) {
+// addDatasetTarget is called when a new input dataset is associated to this SetLocation component
+func (e *SetLocationsExecution) addDatasetTarget(ctx context.Context) error {
+
+	consulClient, err := e.Cfg.GetConsulClient()
+	if err != nil {
+		return err
+	}
+	lock, err := consulutil.AcquireLock(consulClient, ".lexis_lock_cloud_requirements", 0)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Unlock()
+	}()
+
+	datasetReq, err := e.getStoredDatasetRequirements(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Add a new requirement
+	newReq, err := e.getDatasetRequirementFromEnvInputs()
+	if err != nil {
+		return err
+	}
+	datasetReq[e.Operation.RelOp.TargetNodeName] = newReq
+
+	// Store new collected requirements value
+	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		datasetReqConsulAttribute, datasetReq)
+	if err != nil {
+		err = errors.Wrapf(err, "Failed to store dataset requirement details for deployment %s node %s",
+			e.DeploymentID, e.NodeName)
+		return err
+	}
+
+	return err
+}
+
+// getStoredDatasetRequirements retrieves dataset requirements already computed and
+// stored by Yorc
+func (e *SetLocationsExecution) getStoredDatasetRequirements(ctx context.Context) (map[string]DatasetRequirement, error) {
+
+	var datasetreq map[string]DatasetRequirement
+	ids, err := deployments.GetNodeInstancesIds(ctx, e.DeploymentID, e.NodeName)
+	if err != nil {
+		return datasetreq, err
+	}
+
+	if len(ids) == 0 {
+		return datasetreq, errors.Errorf("Found no instance for node %s in deployment %s", e.NodeName, e.DeploymentID)
+	}
+
+	// Get already collected requirements
+	attr, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, ids[0], datasetReqConsulAttribute)
+	if err != nil {
+		return datasetreq, err
+	}
+
+	if attr == nil || attr.RawString() == "" {
+		datasetreq = make(map[string]DatasetRequirement)
+	} else {
+		err = json.Unmarshal([]byte(attr.RawString()), &datasetreq)
+		if err != nil {
+			return datasetreq, errors.Wrapf(err, "Failed to unmarshal dataset requirements %s", attr.RawString())
+		}
+	}
+
+	return datasetreq, err
+}
+
+// getDatasetRequirementFromEnvInputs gets the relationship operation input parameters
+func (e *SetLocationsExecution) getDatasetRequirementFromEnvInputs() (DatasetRequirement, error) {
+	var req DatasetRequirement
+	var err error
+	for _, envInput := range e.EnvInputs {
+		switch envInput.Name {
+		case "LOCATIONS":
+			var sliceVal []string
+			err = json.Unmarshal([]byte(envInput.Value), &sliceVal)
+			if err != nil {
+				return req, errors.Wrapf(err, "Failed to unmarshal %s", envInput.Value)
+			}
+			req.Locations = sliceVal
+		case "MEM_SIZE":
+			req.Size = envInput.Value
+		case "NUMBER_OF_FILES":
+			req.NumberOfFiles = envInput.Value
+		case "NUMBER_OF_SMALL_FILES":
+			req.NumberOfSmallFiles = envInput.Value
+		default:
+			// Not a requirement on input dataset
+		}
+	}
+
+	return req, err
+}
+
+func (e *SetLocationsExecution) computeLocations(ctx context.Context, cloudReqs map[string]CloudRequirement,
+	datasetReqs map[string]DatasetRequirement) (map[string]CloudLocation, error) {
+
 	locations := make(map[string]CloudLocation)
 	var err error
 
 	// TODO: call dynamic allocation business logic
-	for nodeName, req := range requirements {
+	// instead of using this test code
+	datacenter := "it4i"
+	for datasetName, datasetReq := range datasetReqs {
+		locs := datasetReq.Locations
+		if len(locs) > 0 {
+			// Convention: the first section of location identify the datacenter
+			datacenter = strings.ToLower(strings.SplitN(locs[0], "_", 2)[0])
+			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+				"Using datacenter %s for input dataset %s", datacenter, datasetName)
+			break
+		}
+	}
+
+	for nodeName, req := range cloudReqs {
 		// Get user according to the version
 		user := "centos"
-		imageID := "9ac7db93-dbed-4a41-8e77-616024e48c2e"
+		var imageID string
 		distrib := strings.ToLower(req.OSDistribution)
+		numCPUS := 2
+		var floatingIPPool string
+		var flavorName string
+		if req.NumCPUs != "" {
+			numCPUS, err = strconv.Atoi(req.NumCPUs)
+			if err != nil {
+				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+					"[ERROR] Wrong number of CPUs for %s : %s, assuming it needs 2 CPUs", nodeName, req.NumCPUs)
+			}
+		}
 		if distrib == "ubuntu" {
 			user = "ubuntu"
-			imageID = "8aecf074-8bfe-40ce-9de4-eb260351adb8"
 		} else if distrib == "windows" {
 			user = "Admin"
-			imageID = "2436a8b1-737c-429d-b4eb-e6b415bc9d02"
+		}
+		if datacenter == "it4i" {
+			if distrib == "ubuntu" {
+				imageID = "a619d8b0-e083-48b8-9c7e-e647324d1961"
+			} else if distrib == "windows" {
+				imageID = "94411a31-c407-4751-94c9-a4f4a963708d"
+			} else {
+				imageID = "768a2db5-1381-42be-894d-e4b496ca24b8"
+			}
+
+			switch numCPUS {
+			case 0, 1, 2:
+				flavorName = "normal"
+			case 3, 4:
+				flavorName = "large"
+			default:
+				flavorName = "xlarge-mem128"
+			}
+
+			floatingIPPool = "vlan104_lexis"
+		} else {
+			if distrib == "ubuntu" {
+				imageID = "0d006427-aef5-4ed8-99c6-e381724a60e0"
+			} else if distrib == "windows" {
+				imageID = "2436a8b1-737c-429d-b4eb-e6b415bc9d02"
+			} else {
+				imageID = "9ac7db93-dbed-4a41-8e77-616024e48c2e"
+			}
+
+			switch numCPUS {
+			case 0, 1, 2:
+				flavorName = "lrz.medium"
+			case 3, 4:
+				flavorName = "lrz.large"
+			default:
+				flavorName = "lrz.xlarge"
+			}
+
+			floatingIPPool = "internet_pool"
+
 		}
 
 		locations[nodeName] = CloudLocation{
-			Name:           "lrz",
-			Flavor:         "lrz.medium",
+			Name:           datacenter,
+			Flavor:         flavorName,
 			ImageID:        imageID,
-			FloatingIPPool: "MWN_pool",
+			FloatingIPPool: floatingIPPool,
 			User:           user,
 		}
+	}
+	// Store new collected requirements value
+	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		cloudLocationsConsulAttribute, locations)
+	if err != nil {
+		err = errors.Wrapf(err, "Failed to store cloud locations results for deployment %s node %s",
+			e.DeploymentID, e.NodeName)
+		return locations, err
 	}
 	return locations, err
 
@@ -333,8 +525,7 @@ func (e *SetLocationsExecution) setCloudLocation(ctx context.Context, nodeName s
 	}
 
 	// Add the new location in this node template metadata
-
-	newLocationName := "openstack_" + location.Name
+	newLocationName := location.Name + "_openstack"
 	if nodeTemplate.Metadata == nil {
 		nodeTemplate.Metadata = make(map[string]string)
 	}
