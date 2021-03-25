@@ -92,6 +92,36 @@ data_types:
         description: >
           User used to connect to the compute instance
         required: false
+  org.lexis.common.dynamic.orchestration.types.HPCTaskLocation:
+    derived_from: tosca.datatypes.Root
+    description: Cluster location of a HEAppE job task
+    properties:
+      cluster_node_type_id:
+        type: string
+        description: HEAppE cluster node type identifier
+        required: false
+      command_template_id:
+        type: string
+        description: HEAppE command template identifier
+        required: false
+  org.lexis.common.dynamic.orchestration.types.HPCLocation:
+    derived_from: tosca.datatypes.Root
+    description: Location and properties to use to allocate a compute instance
+    properties:
+      location_name:
+        type: string
+        description: Location where to allocate the compute instance
+        required: false
+      project_name:
+        type: string
+        description: HPC project name
+        required: false
+      tasks_location:
+        type: map
+        description: Tasks location details 
+        entry_schema:
+          type: org.lexis.common.dynamic.orchestration.types.HPCTaskLocation
+        required: false
 artifact_types:
   org.lexis.common.dynamic.orchestration.artifacts.Deployment:
     derived_from: tosca.artifacts.Deployment
@@ -111,12 +141,22 @@ node_types:
       cloud_requirements:
         type: map
         description: Requirements on cloud instances
+      hpc_requirements:
+        type: map
+        description: Requirements on HPC jobs
+        entry_schema:
+          type: org.lexis.common.heappe.types.JobSpecification
       dataset_requirements:
         type: map
         description: Requirements from input datasets
       cloud_locations:
         type: map
         description: Locations to use for cloud instances
+      hpc_locations:
+        type: map
+        description: Locations to use for HPC jobs
+        entry_schema:
+          type: org.lexis.common.dynamic.orchestration.types.HPCLocation
     requirements:
       - cloud_instance:
           capability: tosca.capabilities.OperatingSystem
@@ -169,6 +209,18 @@ relationship_types:
     description: >
       Relationship with a HEAppE job
     valid_target_types: [ org.lexis.common.heappe.capabilities.HeappeJob ]
+    interfaces:
+      Configure:
+        pre_configure_source:
+          inputs:
+            JOB_SPECIFICATION: { get_property: [TARGET, JobSpecification] }
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook
+  org.lexis.common.dynamic.orchestration.relationships.OptionalHeappeJob:
+    derived_from: org.lexis.common.dynamic.orchestration.relationships.HeappeJob
+    description: >
+      Relationship with a HEAppE job that can be skipped if no location is available for it
   org.lexis.common.dynamic.orchestration.relationships.Dataset:
     derived_from: tosca.relationships.DependsOn
     description: >

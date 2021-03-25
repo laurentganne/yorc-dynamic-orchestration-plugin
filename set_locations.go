@@ -26,6 +26,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/lexis-project/yorc-heappe-plugin/heappe"
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
@@ -38,13 +39,16 @@ import (
 )
 
 const (
-	cloudTargetRelationship         = "org.lexis.common.dynamic.orchestration.relationships.CloudResource"
-	optionalCloudTargetRelationship = "org.lexis.common.dynamic.orchestration.relationships.OptionalCloudResource"
-	datasetTargetRelationship       = "org.lexis.common.dynamic.orchestration.relationships.Dataset"
-	fipConnectivityCapability       = "yorc.capabilities.openstack.FIPConnectivity"
-	cloudReqConsulAttribute         = "cloud_requirements"
-	cloudLocationsConsulAttribute   = "cloud_locations"
-	datasetReqConsulAttribute       = "input_dataset"
+	cloudTargetRelationship          = "org.lexis.common.dynamic.orchestration.relationships.CloudResource"
+	optionalCloudTargetRelationship  = "org.lexis.common.dynamic.orchestration.relationships.OptionalCloudResource"
+	heappeTargetRelationship         = "org.lexis.common.dynamic.orchestration.relationships.HeappeJob"
+	optionalHEAppETargetRelationship = "org.lexis.common.dynamic.orchestration.relationships.OptionalHeappeJob"
+	datasetTargetRelationship        = "org.lexis.common.dynamic.orchestration.relationships.Dataset"
+	fipConnectivityCapability        = "yorc.capabilities.openstack.FIPConnectivity"
+	cloudReqConsulAttribute          = "cloud_requirements"
+	hpcReqConsulAttribute            = "heappe_job"
+	cloudLocationsConsulAttribute    = "cloud_locations"
+	datasetReqConsulAttribute        = "input_dataset"
 )
 
 // SetLocationsExecution holds Locations computation properties
@@ -71,8 +75,17 @@ type CloudRequirement struct {
 	Optional       string `json:"optional,omitempty"`
 }
 
-// CloudRequirement holds properties of a cloud location to use
+// CloudLocation holds properties of a cloud location to use
 type CloudLocation struct {
+	Name           string `json:"location_name"`
+	Flavor         string `json:"flavor"`
+	ImageID        string `json:"image_id"`
+	FloatingIPPool string `json:"floating_ip_pool"`
+	User           string `json:"user"`
+}
+
+// CloudLocation holds properties of a cloud location to use
+type HPCLocation struct {
 	Name           string `json:"location_name"`
 	Flavor         string `json:"flavor"`
 	ImageID        string `json:"image_id"`
@@ -153,14 +166,26 @@ func (e *SetLocationsExecution) setLocations(ctx context.Context) error {
 		return err
 	}
 
-	// Compute locations fulfilling these requirements
-	locations, err := e.computeLocations(ctx, cloudReqs, datasetReqs)
+	hpcReqs, err := e.getStoredHPCRequirements(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Assign locations to instances
-	err = e.assignCloudLocations(ctx, cloudReqs, locations)
+	// Compute locations fulfilling these requirements
+	// TODO cloudLocations, hpcLocations, err := e.computeLocations(ctx, cloudReqs, hpcReqs, datasetReqs)
+	cloudLocations, err := e.computeLocations(ctx, cloudReqs, hpcReqs, datasetReqs)
+	if err != nil {
+		return err
+	}
+
+	// Assign locations to cloud instances
+	err = e.assignCloudLocations(ctx, cloudReqs, cloudLocations)
+	if err != nil {
+		return err
+	}
+
+	// Assign locations to HEAppE jobs
+	// TODO err = e.assignHPCLocations(ctx, cloudReqs, cloudLocations)
 
 	return err
 }
@@ -179,6 +204,20 @@ func (e *SetLocationsExecution) addTarget(ctx context.Context) error {
 			return err
 		}
 		return e.addCloudTarget(ctx, isOptionalTarget)
+	}
+
+	isHPCTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
+		e.Operation.ImplementedInType, heappeTargetRelationship)
+	if err != nil {
+		return err
+	}
+	if isHPCTarget {
+		isOptionalTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
+			e.Operation.ImplementedInType, optionalHEAppETargetRelationship)
+		if err != nil {
+			return err
+		}
+		return e.addHPCTarget(ctx, isOptionalTarget)
 	}
 
 	isDatasetTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
@@ -290,6 +329,97 @@ func (e *SetLocationsExecution) getStoredCloudRequirements(ctx context.Context) 
 	return cloudreq, err
 }
 
+// addHPCTarget is called when a new target is associated to this SetLocation component
+func (e *SetLocationsExecution) addHPCTarget(ctx context.Context, optional bool) error {
+
+	consulClient, err := e.Cfg.GetConsulClient()
+	if err != nil {
+		return err
+	}
+	lock, err := consulutil.AcquireLock(consulClient, ".lexis_lock_cloud_requirements", 0)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Unlock()
+	}()
+
+	hpcreq, err := e.getStoredHPCRequirements(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Add a new requirement
+	newReq, err := e.getHPCRequirementFromEnvInputs()
+	if err != nil {
+		return err
+	}
+	hpcreq[e.Operation.RelOp.TargetNodeName] = newReq
+
+	// Store new collected requirements value
+	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		hpcReqConsulAttribute, hpcreq)
+	if err != nil {
+		err = errors.Wrapf(err, "Failed to store HPC requirement details for deployment %s node %s",
+			e.DeploymentID, e.NodeName)
+		return err
+	}
+
+	return err
+}
+
+// getHPCRequirementFromEnvInputs gets the relationship operation input parameters
+func (e *SetLocationsExecution) getHPCRequirementFromEnvInputs() (heappe.JobSpecification, error) {
+	var req heappe.JobSpecification
+	var err error
+	for _, envInput := range e.EnvInputs {
+		switch envInput.Name {
+		case "JOB_SPECIFICATION":
+			err := json.Unmarshal([]byte(envInput.Value), &req)
+			if err != nil {
+				err = errors.Wrapf(err, "Failed to unmarshal heappe job from string %s", envInput.Value)
+			}
+			return req, err
+		default:
+			// Not a requirement on cloud instance resource
+		}
+	}
+
+	return req, err
+}
+
+// getStoredHPCRequirements retrieves HPC requirements already computed and
+// stored by Yorc
+func (e *SetLocationsExecution) getStoredHPCRequirements(ctx context.Context) (map[string]heappe.JobSpecification, error) {
+
+	var hpcreq map[string]heappe.JobSpecification
+	ids, err := deployments.GetNodeInstancesIds(ctx, e.DeploymentID, e.NodeName)
+	if err != nil {
+		return hpcreq, err
+	}
+
+	if len(ids) == 0 {
+		return hpcreq, errors.Errorf("Found no instance for node %s in deployment %s", e.NodeName, e.DeploymentID)
+	}
+
+	// Get already collected requirements
+	attr, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, ids[0], hpcReqConsulAttribute)
+	if err != nil {
+		return hpcreq, err
+	}
+
+	if attr == nil || attr.RawString() == "" {
+		hpcreq = make(map[string]heappe.JobSpecification)
+	} else {
+		err = json.Unmarshal([]byte(attr.RawString()), &hpcreq)
+		if err != nil {
+			return hpcreq, errors.Wrapf(err, "Failed to unmarshal %s", attr.RawString())
+		}
+	}
+
+	return hpcreq, err
+}
+
 // addDatasetTarget is called when a new input dataset is associated to this SetLocation component
 func (e *SetLocationsExecution) addDatasetTarget(ctx context.Context) error {
 
@@ -389,14 +519,14 @@ func (e *SetLocationsExecution) getDatasetRequirementFromEnvInputs() (DatasetReq
 }
 
 func (e *SetLocationsExecution) computeLocations(ctx context.Context, cloudReqs map[string]CloudRequirement,
-	datasetReqs map[string]DatasetRequirement) (map[string]CloudLocation, error) {
+	hpcReqs map[string]heappe.JobSpecification, datasetReqs map[string]DatasetRequirement) (map[string]CloudLocation, error) {
 
 	locations := make(map[string]CloudLocation)
 	var err error
 
 	// TODO: call dynamic allocation business logic
 	// instead of using this test code
-	datacenter := "it4i"
+	datacenter := "lrz"
 	for datasetName, datasetReq := range datasetReqs {
 		locs := datasetReq.Locations
 		if len(locs) > 0 {
