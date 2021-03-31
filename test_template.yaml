@@ -23,12 +23,39 @@ topology_template:
     input_dataset_path:
       type: string
       description: DDI path to input dataset
+    computation_heappe_job:
+      type: org.lexis.common.heappe.types.JobSpecification
+      description: Description of the HEAppE job/tasks
+      default:
+        Name: TestJob
+        Project: "DD-19-14"
+        ClusterId: 2
+        Tasks:
+          - Name: TestTemplate
+            ClusterNodeTypeId: 8
+            CommandTemplateId: 2
+            TemplateParameterValues:
+              - CommandParameterIdentifier: inputParam
+                ParameterValue: inputParam
+            WalltimeLimit: 3600
+            MinCores: 1
+            MaxCores: 1
+            Priority: 4
+            StandardOutputFile: "stdout"
+            StandardErrorFile: "stderr"
+            ProgressFile: "stdprog"
+            LogFile: "stdlog"
+      required: false
   node_templates:
     InputDatasetInfoJob:
       type: org.lexis.common.ddi.nodes.GetDDIDatasetInfoJob
       properties:
         token: {get_input: token}
         dataset_path: {get_input: input_dataset_path}
+    FloatingIP1:
+      type: yorc.nodes.openstack.FloatingIP
+    FloatingIP2:
+      type: yorc.nodes.openstack.FloatingIP
     FirstVM:
       type: tosca.nodes.Compute
       requirements:
@@ -62,15 +89,23 @@ topology_template:
         os:
           properties:
             type: linux
-    FloatingIP1:
-      type: yorc.nodes.openstack.FloatingIP
-    FloatingIP2:
-      type: yorc.nodes.openstack.FloatingIP
+    HPCJob:
+      type: org.lexis.common.heappe.nodes.Job
+      metadata:
+        task: computation
+      properties:
+        token: { get_input: token }
+        JobSpecification: { get_input: computation_heappe_job }
     SetLocations:
       type: org.lexis.common.dynamic.orchestration.nodes.SetLocations
       properties:
         token: { get_input: token }
       requirements:
+        - InputDataset:
+            type_requirement: input_dataset
+            node: InputDatasetInfoJob
+            capability: org.lexis.common.ddi.capabilities.DatasetInfo
+            relationship: org.lexis.common.dynamic.orchestration.relationships.Dataset
         - CloudResourceFirstVM:
             type_requirement: cloud_instance
             node: SecondVM
@@ -81,13 +116,86 @@ topology_template:
             node: FirstVM
             capability: tosca.capabilities.OperatingSystem
             relationship: org.lexis.common.dynamic.orchestration.relationships.CloudResource
-        - InputDataset:
-            type_requirement: input_dataset
-            node: InputDatasetInfoJob
-            capability: org.lexis.common.ddi.capabilities.DatasetInfo
-            relationship: org.lexis.common.dynamic.orchestration.relationships.Dataset
+        - HPCResourceHPCJob:
+            type_requirement: heappe_job
+            node: HPCJob
+            capability: org.lexis.common.heappe.capabilities.HeappeJob
+            relationship: org.lexis.common.dynamic.orchestration.relationships.HeappeJob
   workflows:
     install:
+      steps:
+        SetLocations_initial:
+          target: SetLocations
+          activities:
+            - set_state: initial
+    SetLocationTest:
+      steps:
+        InputDatasetInfoJob_submit:
+          target: InputDatasetInfoJob
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.submit
+          on_success:
+            - InputDatasetInfoJob_run
+        InputDatasetInfoJob_run:
+          target: InputDatasetInfoJob
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.run
+          on_success:
+            - InputDatasetInfoJob_executed
+        InputDatasetInfoJob_executed:
+          target: InputDatasetInfoJob
+          activities:
+            - set_state: executed
+          on_success:
+            - SetLocations_FirstVM_pre_configure_source
+        SetLocations_FirstVM_pre_configure_source:
+          target: SetLocations
+          target_relationship: CloudResourceFirstVM
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: Configure.pre_configure_source
+          on_success:
+            - SetLocations_SecondVM_pre_configure_source
+            - SetLocations_start
+        SetLocations_SecondVM_pre_configure_source:
+          target: SetLocations
+          target_relationship: CloudResourceSecondVM
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: Configure.pre_configure_source
+          on_success:
+            - SetLocations_DatasetInfo_pre_configure_source
+            - SetLocations_start
+        SetLocations_DatasetInfo_pre_configure_source:
+          target: SetLocations
+          target_relationship: InputDataset
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: Configure.pre_configure_source
+          on_success:
+            - SetLocations_HPCJob_pre_configure_source
+            - SetLocations_start
+        SetLocations_HPCJob_pre_configure_source:
+          target: SetLocations
+          target_relationship: HPCResourceHPCJob
+          operation_host: ORCHESTRATOR
+          activities:
+            - call_operation: Configure.pre_configure_source
+          on_success:
+            - SetLocations_start
+        SetLocations_start:
+          target: SetLocations
+          activities:
+            - call_operation: Standard.start
+          on_success:
+            - SetLocations_started
+        SetLocations_started:
+          target: SetLocations
+          activities:
+            - set_state: started
+    Run:
       steps:
         InputDatasetInfoJob_submit:
           target: InputDatasetInfoJob

@@ -44,6 +44,20 @@ data_types:
         type: version
         description: The Operating System version.
         required: false
+      optional:
+        type: boolean
+        description: Is this resource optional
+        default: false
+        required: false
+  org.lexis.common.dynamic.orchestration.types.HPCRequirement:
+    derived_from: org.lexis.common.heappe.types.JobSpecification
+    description: Requirement for a job to create on HPC
+    properties:
+      optional:
+        type: boolean
+        description: Is this resource optional
+        default: false
+        required: false
   org.lexis.common.dynamic.orchestration.types.DatasetRequirement:
     derived_from: tosca.datatypes.Root
     description: Requirement from an input dataset to transfer
@@ -99,11 +113,11 @@ data_types:
     description: Cluster location of a HEAppE job task
     properties:
       cluster_node_type_id:
-        type: string
+        type: integer
         description: HEAppE cluster node type identifier
         required: false
       command_template_id:
-        type: string
+        type: integer
         description: HEAppE command template identifier
         required: false
   org.lexis.common.dynamic.orchestration.types.HPCLocation:
@@ -147,7 +161,7 @@ node_types:
         type: map
         description: Requirements on HPC jobs
         entry_schema:
-          type: org.lexis.common.heappe.types.JobSpecification
+          type: org.lexis.common.dynamic.orchestration.types.HPCRequirement
       dataset_requirements:
         type: map
         description: Requirements from input datasets

@@ -18,12 +18,12 @@ export CGO_ENABLED=0
 
 build: format
 	@echo "--> Running go build"
-	@go build -o ../bin/lexis-dynamic-orchestration-plugin
+	@mkdir -p ./bin
+	@go build -o bin/lexis-dynamic-orchestration-plugin
 	@echo "--> Embedding Dynamic Orchestration types in binary"
 	@rm -Rf ./build
 	@mkdir ./build
 	@zip -q -r ./build/embeddedResources.zip ./tosca/dynamic-orchestration-types.yaml
-	@mkdir -p ./bin
 	@cat ./build/embeddedResources.zip >> ./bin/lexis-dynamic-orchestration-plugin
 	@zip -A ./bin/lexis-dynamic-orchestration-plugin > /dev/null
 

@@ -26,7 +26,6 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/lexis-project/yorc-heappe-plugin/heappe"
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
@@ -48,6 +47,7 @@ const (
 	cloudReqConsulAttribute          = "cloud_requirements"
 	hpcReqConsulAttribute            = "heappe_job"
 	cloudLocationsConsulAttribute    = "cloud_locations"
+	hpcLocationsConsulAttribute      = "hpc_locations"
 	datasetReqConsulAttribute        = "input_dataset"
 )
 
@@ -72,7 +72,46 @@ type CloudRequirement struct {
 	OSType         string `json:"os_type"`
 	OSDistribution string `json:"os_distribution"`
 	OSVersion      string `json:"os_version"`
-	Optional       string `json:"optional,omitempty"`
+	Optional       bool   `json:"optional,omitempty"`
+}
+
+// TaskParalizationParameter holds paramters of tasks parallelization read from a json value providing strings instead of int
+type TaskParalizationParameter struct {
+	MPIProcesses  int `json:"MPIProcesses,string"`
+	OpenMPThreads int `json:"OpenMPThreads,string"`
+	MaxCores      int `json:"MaxCores,string"`
+}
+
+// TaskSpecification holds task properties read from a json value providing strings instead of int
+type TaskSpecification struct {
+	Name                       string
+	MinCores                   int      `json:"MinCores,string"`
+	MaxCores                   int      `json:"MaxCores,string"`
+	WalltimeLimit              int      `json:"WalltimeLimit,string"`
+	RequiredNodes              []string `json:"RequiredNodes,omitempty"`
+	Priority                   int      `json:"Priority,string"`
+	JobArrays                  string
+	IsExclusive                bool                        `json:"IsExclusive,string"`
+	IsRerunnable               bool                        `json:"IsRerunnable,string"`
+	CpuHyperThreading          bool                        `json:"CpuHyperThreading,string"`
+	ClusterNodeTypeID          int                         `json:"ClusterNodeTypeId,string"`
+	CommandTemplateID          int                         `json:"CommandTemplateId,string"`
+	TaskParalizationParameters []TaskParalizationParameter `json:"TaskParalizationParameters,omitempty"`
+}
+
+// JobSpecification holds job properties read from a json value providing strings instead of int
+type JobSpecification struct {
+	Name         string
+	Project      string
+	WaitingLimit int `json:"WaitingLimit,string"`
+	ClusterID    int `json:"ClusterId,string"`
+	Tasks        []TaskSpecification
+}
+
+// HPCRequirement holds a HPC job requirements
+type HPCRequirement struct {
+	*JobSpecification
+	Optional bool `json:"optional,omitempty"`
 }
 
 // CloudLocation holds properties of a cloud location to use
@@ -84,13 +123,17 @@ type CloudLocation struct {
 	User           string `json:"user"`
 }
 
-// CloudLocation holds properties of a cloud location to use
+// TaskLocation holds properties of a task
+type TaskLocation struct {
+	NodeTypeID        int `json:"cluster_node_type_id"`
+	CommandTemplateID int `json:"command_template_id"`
+}
+
+// HPCLocation holds properties of a cloud location to use
 type HPCLocation struct {
-	Name           string `json:"location_name"`
-	Flavor         string `json:"flavor"`
-	ImageID        string `json:"image_id"`
-	FloatingIPPool string `json:"floating_ip_pool"`
-	User           string `json:"user"`
+	Name          string                  `json:"location_name"`
+	Project       string                  `json:"project_name"`
+	TasksLocation map[string]TaskLocation `json:"tasks_location"`
 }
 
 // DatasetRequirement holds an input requirements
@@ -172,8 +215,7 @@ func (e *SetLocationsExecution) setLocations(ctx context.Context) error {
 	}
 
 	// Compute locations fulfilling these requirements
-	// TODO cloudLocations, hpcLocations, err := e.computeLocations(ctx, cloudReqs, hpcReqs, datasetReqs)
-	cloudLocations, err := e.computeLocations(ctx, cloudReqs, hpcReqs, datasetReqs)
+	cloudLocations, hpcLocations, err := e.computeLocations(ctx, cloudReqs, hpcReqs, datasetReqs)
 	if err != nil {
 		return err
 	}
@@ -185,7 +227,7 @@ func (e *SetLocationsExecution) setLocations(ctx context.Context) error {
 	}
 
 	// Assign locations to HEAppE jobs
-	// TODO err = e.assignHPCLocations(ctx, cloudReqs, cloudLocations)
+	err = e.assignHPCLocations(ctx, hpcReqs, hpcLocations)
 
 	return err
 }
@@ -256,6 +298,7 @@ func (e *SetLocationsExecution) addCloudTarget(ctx context.Context, optional boo
 	if err != nil {
 		return err
 	}
+	newReq.Optional = optional
 	cloudreq[e.Operation.RelOp.TargetNodeName] = newReq
 
 	// Store new collected requirements value
@@ -369,8 +412,8 @@ func (e *SetLocationsExecution) addHPCTarget(ctx context.Context, optional bool)
 }
 
 // getHPCRequirementFromEnvInputs gets the relationship operation input parameters
-func (e *SetLocationsExecution) getHPCRequirementFromEnvInputs() (heappe.JobSpecification, error) {
-	var req heappe.JobSpecification
+func (e *SetLocationsExecution) getHPCRequirementFromEnvInputs() (HPCRequirement, error) {
+	var req HPCRequirement
 	var err error
 	for _, envInput := range e.EnvInputs {
 		switch envInput.Name {
@@ -390,9 +433,9 @@ func (e *SetLocationsExecution) getHPCRequirementFromEnvInputs() (heappe.JobSpec
 
 // getStoredHPCRequirements retrieves HPC requirements already computed and
 // stored by Yorc
-func (e *SetLocationsExecution) getStoredHPCRequirements(ctx context.Context) (map[string]heappe.JobSpecification, error) {
+func (e *SetLocationsExecution) getStoredHPCRequirements(ctx context.Context) (map[string]HPCRequirement, error) {
 
-	var hpcreq map[string]heappe.JobSpecification
+	var hpcreq map[string]HPCRequirement
 	ids, err := deployments.GetNodeInstancesIds(ctx, e.DeploymentID, e.NodeName)
 	if err != nil {
 		return hpcreq, err
@@ -409,7 +452,7 @@ func (e *SetLocationsExecution) getStoredHPCRequirements(ctx context.Context) (m
 	}
 
 	if attr == nil || attr.RawString() == "" {
-		hpcreq = make(map[string]heappe.JobSpecification)
+		hpcreq = make(map[string]HPCRequirement)
 	} else {
 		err = json.Unmarshal([]byte(attr.RawString()), &hpcreq)
 		if err != nil {
@@ -519,9 +562,10 @@ func (e *SetLocationsExecution) getDatasetRequirementFromEnvInputs() (DatasetReq
 }
 
 func (e *SetLocationsExecution) computeLocations(ctx context.Context, cloudReqs map[string]CloudRequirement,
-	hpcReqs map[string]heappe.JobSpecification, datasetReqs map[string]DatasetRequirement) (map[string]CloudLocation, error) {
+	hpcReqs map[string]HPCRequirement, datasetReqs map[string]DatasetRequirement) (map[string]CloudLocation, map[string]HPCLocation, error) {
 
-	locations := make(map[string]CloudLocation)
+	cloudLocations := make(map[string]CloudLocation)
+	hpcLocations := make(map[string]HPCLocation)
 	var err error
 
 	// TODO: call dynamic allocation business logic
@@ -599,7 +643,7 @@ func (e *SetLocationsExecution) computeLocations(ctx context.Context, cloudReqs 
 
 		}
 
-		locations[nodeName] = CloudLocation{
+		cloudLocations[nodeName] = CloudLocation{
 			Name:           datacenter,
 			Flavor:         flavorName,
 			ImageID:        imageID,
@@ -607,15 +651,41 @@ func (e *SetLocationsExecution) computeLocations(ctx context.Context, cloudReqs 
 			User:           user,
 		}
 	}
+
 	// Store new collected requirements value
 	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
-		cloudLocationsConsulAttribute, locations)
+		cloudLocationsConsulAttribute, cloudLocations)
 	if err != nil {
 		err = errors.Wrapf(err, "Failed to store cloud locations results for deployment %s node %s",
 			e.DeploymentID, e.NodeName)
-		return locations, err
+		return cloudLocations, hpcLocations, err
 	}
-	return locations, err
+
+	for nodeName, jobSpec := range hpcReqs {
+		datacenter = "it4i"
+
+		taskLocation := TaskLocation{
+			NodeTypeID:        jobSpec.Tasks[0].ClusterNodeTypeID,
+			CommandTemplateID: jobSpec.Tasks[0].CommandTemplateID,
+		}
+		tasksLocations := map[string]TaskLocation{
+			jobSpec.Tasks[0].Name: taskLocation,
+		}
+		hpcLocations[nodeName] = HPCLocation{
+			Name:          datacenter,
+			Project:       jobSpec.Project,
+			TasksLocation: tasksLocations,
+		}
+	}
+	// Store new collected requirements value
+	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		hpcLocationsConsulAttribute, hpcLocations)
+	if err != nil {
+		err = errors.Wrapf(err, "Failed to store cloud locations results for deployment %s node %s",
+			e.DeploymentID, e.NodeName)
+		return cloudLocations, hpcLocations, err
+	}
+	return cloudLocations, hpcLocations, err
 
 }
 
@@ -625,8 +695,7 @@ func (e *SetLocationsExecution) assignCloudLocations(ctx context.Context, requir
 	for nodeName, req := range requirements {
 		location, ok := locations[nodeName]
 		if !ok {
-			optional, _ := strconv.ParseBool(req.Optional)
-			if optional {
+			if req.Optional {
 				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 					"No available location for optional compute instance %s in deployment %s", nodeName, e.DeploymentID)
 				err = e.setCloudLocationSkipped(ctx, nodeName)
@@ -641,6 +710,32 @@ func (e *SetLocationsExecution) assignCloudLocations(ctx context.Context, requir
 			"Location for %s: %s", nodeName, location.Name)
 
 		err = e.setCloudLocation(ctx, nodeName, req, location)
+
+	}
+	return err
+}
+
+func (e *SetLocationsExecution) assignHPCLocations(ctx context.Context, requirements map[string]HPCRequirement, locations map[string]HPCLocation) error {
+
+	var err error
+	for nodeName, req := range requirements {
+		location, ok := locations[nodeName]
+		if !ok {
+			if req.Optional {
+				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+					"No available location for optional compute instance %s in deployment %s", nodeName, e.DeploymentID)
+				err = e.setHPCLocationSkipped(ctx, nodeName)
+				if err != nil {
+					return err
+				}
+			} else {
+				return errors.Errorf("No available location found for compute instance %s in deployment %s", nodeName, e.DeploymentID)
+			}
+		}
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+			"Location for %s: %s", nodeName, location.Name)
+
+		err = e.setHPCLocation(ctx, nodeName, req, location)
 
 	}
 	return err
@@ -745,9 +840,71 @@ func (e *SetLocationsExecution) setCloudLocation(ctx context.Context, nodeName s
 	return err
 }
 
-// setCloudLocation updates the deployment description of a compute instance that has to be skipped
+// setCloudLocationSkipped updates the deployment description of a compute instance that has to be skipped
 func (e *SetLocationsExecution) setCloudLocationSkipped(ctx context.Context, nodeName string) error {
 	return errors.Errorf("Skipping a cloud compute instance without location not yet implemented")
+}
+
+// setHPCLocation updates the deployment description of a HPC job for a new location
+func (e *SetLocationsExecution) setHPCLocation(ctx context.Context, nodeName string, requirement HPCRequirement, location HPCLocation) error {
+
+	nodeTemplate, err := e.getStoredNodeTemplate(ctx, nodeName)
+	if err != nil {
+		return err
+	}
+
+	// Add the new location in this node template metadata
+	newLocationName := location.Name + "_heappe"
+	if nodeTemplate.Metadata == nil {
+		nodeTemplate.Metadata = make(map[string]string)
+	}
+	nodeTemplate.Metadata[tosca.MetadataLocationNameKey] = newLocationName
+
+	// Update the job specification
+	jobSpecVal, ok := nodeTemplate.Properties["JobSpecification"]
+	if !ok {
+		return errors.Errorf("Found no property JobSpecification in Node Template %+v", nodeTemplate)
+	}
+	jobSpecMap := jobSpecVal.GetMap()
+	jobSpecMap["Project"] = location.Project
+
+	// Update the tasks
+	tasksVal, ok := jobSpecMap["Tasks"]
+	if !ok {
+		return errors.Errorf("Found no property Tasks in Node Template %+v", nodeTemplate)
+	}
+	tasksArray, _ := tasksVal.([]interface{})
+	for taskName, taskLocation := range location.TasksLocation {
+		for _, task := range tasksArray {
+			tMap, _ := task.(map[string]interface{})
+			if taskName == tMap["Name"] {
+				tMap["ClusterNodeTypeId"] = taskLocation.NodeTypeID
+				tMap["CommandTemplateId"] = taskLocation.CommandTemplateID
+				break
+			}
+		}
+	}
+
+	jobSpecMap["Tasks"] = tasksArray
+
+	jobSpecVal, err = tosca.ToValueAssignment(jobSpecMap)
+	if err != nil {
+		return errors.Wrapf(err, "Failed to translate map to value assignment: %+v", jobSpecMap)
+	}
+	nodeTemplate.Properties["JobSpecification"] = jobSpecVal
+
+	// Location is now changed for this node template, storing it
+	err = e.storeNodeTemplate(ctx, nodeName, nodeTemplate)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
+// setHPCLocationSkipped updates the deployment description of a compute instance that has to be skipped
+func (e *SetLocationsExecution) setHPCLocationSkipped(ctx context.Context, nodeName string) error {
+	return errors.Errorf("Skipping a HPC job without location not yet implemented")
 }
 
 // getStoredNodeTemplate returns the description of a node stored by Yorc
