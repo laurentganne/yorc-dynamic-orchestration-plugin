@@ -56,5 +56,11 @@ func main() {
 		return new(operationExecutor)
 	}
 
+	// Set ActionFunc that implements an ActionOperator for DDI jobs
+	servConfig.ActionTypes = []string{computeBestLocationAction}
+	servConfig.ActionFunc = func() prov.ActionOperator {
+		return new(ActionOperator)
+	}
+
 	plugin.Serve(servConfig)
 }

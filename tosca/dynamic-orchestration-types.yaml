@@ -177,6 +177,10 @@ node_types:
         description: Locations to use for HPC jobs
         entry_schema:
           type: org.lexis.common.dynamic.orchestration.types.HPCLocation
+      request_id:
+        type: string
+        description: >
+          ID of the request to compute the best locations
     requirements:
       - cloud_instance:
           capability: tosca.capabilities.OperatingSystem
@@ -195,9 +199,14 @@ node_types:
           occurrences: [0, UNBOUNDED]
     interfaces:
       Standard:
-        start:
-          inputs:
-            TOKEN: { get_property: [SELF, token] }
+      tosca.interfaces.node.lifecycle.Runnable:
+        inputs:
+          TOKEN: { get_property: [SELF, token] }
+        submit:
+          implementation:
+            file: "embedded"
+            type: org.lexis.common.dynamic.orchestration.artifacts.Deployment
+        run:
           implementation:
             file: "embedded"
             type: org.lexis.common.dynamic.orchestration.artifacts.Deployment

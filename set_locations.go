@@ -17,8 +17,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"path"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,8 +30,6 @@ import (
 	"github.com/ystia/yorc/v4/helper/consulutil"
 	"github.com/ystia/yorc/v4/prov"
 	"github.com/ystia/yorc/v4/prov/operations"
-	"github.com/ystia/yorc/v4/storage"
-	storageTypes "github.com/ystia/yorc/v4/storage/types"
 	"github.com/ystia/yorc/v4/tosca"
 )
 
@@ -53,15 +49,16 @@ const (
 
 // SetLocationsExecution holds Locations computation properties
 type SetLocationsExecution struct {
-	KV             *api.KV
-	Cfg            config.Configuration
-	DeploymentID   string
-	TaskID         string
-	NodeName       string
-	Token          string
-	Operation      prov.Operation
-	EnvInputs      []*operations.EnvInput
-	VarInputsNames []string
+	KV                     *api.KV
+	Cfg                    config.Configuration
+	DeploymentID           string
+	TaskID                 string
+	NodeName               string
+	Token                  string
+	Operation              prov.Operation
+	EnvInputs              []*operations.EnvInput
+	VarInputsNames         []string
+	MonitoringTimeInterval time.Duration
 }
 
 // CloudRequirement holds a compute instance requirements
@@ -146,7 +143,22 @@ type DatasetRequirement struct {
 
 // ExecuteAsync is not supported here
 func (e *SetLocationsExecution) ExecuteAsync(ctx context.Context) (*prov.Action, time.Duration, error) {
-	return nil, 0, errors.Errorf("Unsupported asynchronous operation %s", e.Operation.Name)
+	if strings.ToLower(e.Operation.Name) != tosca.RunnableRunOperationName {
+		return nil, 0, errors.Errorf("Unsupported asynchronous operation %q", e.Operation.Name)
+	}
+
+	requestID, err := e.getRequestID(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	data := make(map[string]string)
+	data[actionDataTaskID] = e.TaskID
+	data[actionDataNodeName] = e.NodeName
+	data[actionDataRequestID] = requestID
+	data[actionDataToken] = e.Token
+
+	return &prov.Action{ActionType: computeBestLocationAction, Data: data}, e.MonitoringTimeInterval, err
 }
 
 // Execute executes a synchronous operation
@@ -161,7 +173,7 @@ func (e *SetLocationsExecution) Execute(ctx context.Context) error {
 	case "standard.start":
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 			"Starting %q", e.NodeName)
-		return e.setLocations(ctx)
+		// Nothing to do here
 	case "uninstall", "standard.delete":
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 			"Deleting %q", e.NodeName)
@@ -174,13 +186,55 @@ func (e *SetLocationsExecution) Execute(ctx context.Context) error {
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 			"New target for %q", e.NodeName)
 		return e.addTarget(ctx)
-	case tosca.RunnableSubmitOperationName, tosca.RunnableCancelOperationName:
-		err = errors.Errorf("Unsupported operation %s", e.Operation.Name)
+	case tosca.RunnableSubmitOperationName:
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+			"%s submitting request to compute best location by", e.NodeName)
+		err = e.submitComputeBestLocationRequest(ctx)
+		if err != nil {
+			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+				"Failed to submit data transfer for node %q, error %s", e.NodeName, err.Error())
+
+		}
+	case tosca.RunnableCancelOperationName:
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+			"Canceling Job %q", e.NodeName)
+		/*
+			err = e.cancelJob(ctx)
+			if err != nil {
+				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+					"Failed to cancel Job %q, error %s", e.NodeName, err.Error())
+			}
+		*/
+		err = errors.Errorf("Unsupported operation %q", e.Operation.Name)
 	default:
 		err = errors.Errorf("Unsupported operation %s", e.Operation.Name)
 	}
 
 	return err
+}
+
+func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Context) error {
+	// TODO: call the Business logic
+	requestID := "test_request_id"
+	// Store the request id
+	err := deployments.SetAttributeForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		requestIDConsulAttribute, requestID)
+	if err != nil {
+		return errors.Wrapf(err, "Request %s submitted, but failed to store this request id", requestID)
+	}
+	return err
+}
+
+func (e *SetLocationsExecution) getRequestID(ctx context.Context) (string, error) {
+
+	val, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, "0", requestIDConsulAttribute)
+	if err != nil {
+		return "", errors.Wrapf(err, "Failed to get request ID for deployment %s node %s", e.DeploymentID, e.NodeName)
+	} else if val == nil {
+		return "", errors.Errorf("Found no request id for deployment %s node %s", e.DeploymentID, e.NodeName)
+	}
+
+	return val.RawString(), err
 }
 
 // ResolveExecution resolves inputs before the execution of an operation
@@ -192,43 +246,6 @@ func (e *SetLocationsExecution) resolveInputs(ctx context.Context) error {
 	var err error
 	e.EnvInputs, e.VarInputsNames, err = operations.ResolveInputsWithInstances(
 		ctx, e.DeploymentID, e.NodeName, e.TaskID, e.Operation, nil, nil)
-	return err
-}
-
-func (e *SetLocationsExecution) setLocations(ctx context.Context) error {
-
-	var err error
-
-	// Get requirements
-	cloudReqs, err := e.getStoredCloudRequirements(ctx)
-	if err != nil {
-		return err
-	}
-	datasetReqs, err := e.getStoredDatasetRequirements(ctx)
-	if err != nil {
-		return err
-	}
-
-	hpcReqs, err := e.getStoredHPCRequirements(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Compute locations fulfilling these requirements
-	cloudLocations, hpcLocations, err := e.computeLocations(ctx, cloudReqs, hpcReqs, datasetReqs)
-	if err != nil {
-		return err
-	}
-
-	// Assign locations to cloud instances
-	err = e.assignCloudLocations(ctx, cloudReqs, cloudLocations)
-	if err != nil {
-		return err
-	}
-
-	// Assign locations to HEAppE jobs
-	err = e.assignHPCLocations(ctx, hpcReqs, hpcLocations)
-
 	return err
 }
 
@@ -288,7 +305,7 @@ func (e *SetLocationsExecution) addCloudTarget(ctx context.Context, optional boo
 		_ = lock.Unlock()
 	}()
 
-	cloudreq, err := e.getStoredCloudRequirements(ctx)
+	cloudreq, err := getStoredCloudRequirements(ctx, e.DeploymentID, e.NodeName)
 	if err != nil {
 		return err
 	}
@@ -342,20 +359,21 @@ func (e *SetLocationsExecution) getCloudRequirementFromEnvInputs() (CloudRequire
 
 // getStoredCloudRequirements retrieves cloud requirements already computed and
 // stored by Yorc
-func (e *SetLocationsExecution) getStoredCloudRequirements(ctx context.Context) (map[string]CloudRequirement, error) {
+func getStoredCloudRequirements(ctx context.Context,
+	deploymentID, nodeName string) (map[string]CloudRequirement, error) {
 
 	var cloudreq map[string]CloudRequirement
-	ids, err := deployments.GetNodeInstancesIds(ctx, e.DeploymentID, e.NodeName)
+	ids, err := deployments.GetNodeInstancesIds(ctx, deploymentID, nodeName)
 	if err != nil {
 		return cloudreq, err
 	}
 
 	if len(ids) == 0 {
-		return cloudreq, errors.Errorf("Found no instance for node %s in deployment %s", e.NodeName, e.DeploymentID)
+		return cloudreq, errors.Errorf("Found no instance for node %s in deployment %s", nodeName, deploymentID)
 	}
 
 	// Get already collected requirements
-	attr, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, ids[0], cloudReqConsulAttribute)
+	attr, err := deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, ids[0], cloudReqConsulAttribute)
 	if err != nil {
 		return cloudreq, err
 	}
@@ -387,7 +405,7 @@ func (e *SetLocationsExecution) addHPCTarget(ctx context.Context, optional bool)
 		_ = lock.Unlock()
 	}()
 
-	hpcreq, err := e.getStoredHPCRequirements(ctx)
+	hpcreq, err := getStoredHPCRequirements(ctx, e.DeploymentID, e.NodeName)
 	if err != nil {
 		return err
 	}
@@ -433,20 +451,21 @@ func (e *SetLocationsExecution) getHPCRequirementFromEnvInputs() (HPCRequirement
 
 // getStoredHPCRequirements retrieves HPC requirements already computed and
 // stored by Yorc
-func (e *SetLocationsExecution) getStoredHPCRequirements(ctx context.Context) (map[string]HPCRequirement, error) {
+func getStoredHPCRequirements(ctx context.Context,
+	deploymentID, nodeName string) (map[string]HPCRequirement, error) {
 
 	var hpcreq map[string]HPCRequirement
-	ids, err := deployments.GetNodeInstancesIds(ctx, e.DeploymentID, e.NodeName)
+	ids, err := deployments.GetNodeInstancesIds(ctx, deploymentID, nodeName)
 	if err != nil {
 		return hpcreq, err
 	}
 
 	if len(ids) == 0 {
-		return hpcreq, errors.Errorf("Found no instance for node %s in deployment %s", e.NodeName, e.DeploymentID)
+		return hpcreq, errors.Errorf("Found no instance for node %s in deployment %s", nodeName, deploymentID)
 	}
 
 	// Get already collected requirements
-	attr, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, ids[0], hpcReqConsulAttribute)
+	attr, err := deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, ids[0], hpcReqConsulAttribute)
 	if err != nil {
 		return hpcreq, err
 	}
@@ -478,7 +497,7 @@ func (e *SetLocationsExecution) addDatasetTarget(ctx context.Context) error {
 		_ = lock.Unlock()
 	}()
 
-	datasetReq, err := e.getStoredDatasetRequirements(ctx)
+	datasetReq, err := getStoredDatasetRequirements(ctx, e.DeploymentID, e.NodeName)
 	if err != nil {
 		return err
 	}
@@ -504,20 +523,21 @@ func (e *SetLocationsExecution) addDatasetTarget(ctx context.Context) error {
 
 // getStoredDatasetRequirements retrieves dataset requirements already computed and
 // stored by Yorc
-func (e *SetLocationsExecution) getStoredDatasetRequirements(ctx context.Context) (map[string]DatasetRequirement, error) {
+func getStoredDatasetRequirements(ctx context.Context,
+	deploymentID, nodeName string) (map[string]DatasetRequirement, error) {
 
 	var datasetreq map[string]DatasetRequirement
-	ids, err := deployments.GetNodeInstancesIds(ctx, e.DeploymentID, e.NodeName)
+	ids, err := deployments.GetNodeInstancesIds(ctx, deploymentID, nodeName)
 	if err != nil {
 		return datasetreq, err
 	}
 
 	if len(ids) == 0 {
-		return datasetreq, errors.Errorf("Found no instance for node %s in deployment %s", e.NodeName, e.DeploymentID)
+		return datasetreq, errors.Errorf("Found no instance for node %s in deployment %s", nodeName, deploymentID)
 	}
 
 	// Get already collected requirements
-	attr, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, ids[0], datasetReqConsulAttribute)
+	attr, err := deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, ids[0], datasetReqConsulAttribute)
 	if err != nil {
 		return datasetreq, err
 	}
@@ -559,367 +579,4 @@ func (e *SetLocationsExecution) getDatasetRequirementFromEnvInputs() (DatasetReq
 	}
 
 	return req, err
-}
-
-func (e *SetLocationsExecution) computeLocations(ctx context.Context, cloudReqs map[string]CloudRequirement,
-	hpcReqs map[string]HPCRequirement, datasetReqs map[string]DatasetRequirement) (map[string]CloudLocation, map[string]HPCLocation, error) {
-
-	cloudLocations := make(map[string]CloudLocation)
-	hpcLocations := make(map[string]HPCLocation)
-	var err error
-
-	// TODO: call dynamic allocation business logic
-	// instead of using this test code
-	datacenter := "lrz"
-	for datasetName, datasetReq := range datasetReqs {
-		locs := datasetReq.Locations
-		if len(locs) > 0 {
-			// Convention: the first section of location identify the datacenter
-			datacenter = strings.ToLower(strings.SplitN(locs[0], "_", 2)[0])
-			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-				"Using datacenter %s for input dataset %s", datacenter, datasetName)
-			break
-		}
-	}
-
-	for nodeName, req := range cloudReqs {
-		// Get user according to the version
-		user := "centos"
-		var imageID string
-		distrib := strings.ToLower(req.OSDistribution)
-		numCPUS := 2
-		var floatingIPPool string
-		var flavorName string
-		if req.NumCPUs != "" {
-			numCPUS, err = strconv.Atoi(req.NumCPUs)
-			if err != nil {
-				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-					"[ERROR] Wrong number of CPUs for %s : %s, assuming it needs 2 CPUs", nodeName, req.NumCPUs)
-			}
-		}
-		if distrib == "ubuntu" {
-			user = "ubuntu"
-		} else if distrib == "windows" {
-			user = "Admin"
-		}
-		if datacenter == "it4i" {
-			if distrib == "ubuntu" {
-				imageID = "a619d8b0-e083-48b8-9c7e-e647324d1961"
-			} else if distrib == "windows" {
-				imageID = "94411a31-c407-4751-94c9-a4f4a963708d"
-			} else {
-				imageID = "768a2db5-1381-42be-894d-e4b496ca24b8"
-			}
-
-			switch numCPUS {
-			case 0, 1, 2:
-				flavorName = "normal"
-			case 3, 4:
-				flavorName = "large"
-			default:
-				flavorName = "xlarge-mem128"
-			}
-
-			floatingIPPool = "vlan104_lexis"
-		} else {
-			if distrib == "ubuntu" {
-				imageID = "0d006427-aef5-4ed8-99c6-e381724a60e0"
-			} else if distrib == "windows" {
-				imageID = "2436a8b1-737c-429d-b4eb-e6b415bc9d02"
-			} else {
-				imageID = "9ac7db93-dbed-4a41-8e77-616024e48c2e"
-			}
-
-			switch numCPUS {
-			case 0, 1, 2:
-				flavorName = "lrz.medium"
-			case 3, 4:
-				flavorName = "lrz.large"
-			default:
-				flavorName = "lrz.xlarge"
-			}
-
-			floatingIPPool = "internet_pool"
-
-		}
-
-		cloudLocations[nodeName] = CloudLocation{
-			Name:           datacenter,
-			Flavor:         flavorName,
-			ImageID:        imageID,
-			FloatingIPPool: floatingIPPool,
-			User:           user,
-		}
-	}
-
-	// Store new collected requirements value
-	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
-		cloudLocationsConsulAttribute, cloudLocations)
-	if err != nil {
-		err = errors.Wrapf(err, "Failed to store cloud locations results for deployment %s node %s",
-			e.DeploymentID, e.NodeName)
-		return cloudLocations, hpcLocations, err
-	}
-
-	for nodeName, jobSpec := range hpcReqs {
-		datacenter = "it4i"
-
-		taskLocation := TaskLocation{
-			NodeTypeID:        jobSpec.Tasks[0].ClusterNodeTypeID,
-			CommandTemplateID: jobSpec.Tasks[0].CommandTemplateID,
-		}
-		tasksLocations := map[string]TaskLocation{
-			jobSpec.Tasks[0].Name: taskLocation,
-		}
-		hpcLocations[nodeName] = HPCLocation{
-			Name:          datacenter,
-			Project:       jobSpec.Project,
-			TasksLocation: tasksLocations,
-		}
-	}
-	// Store new collected requirements value
-	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
-		hpcLocationsConsulAttribute, hpcLocations)
-	if err != nil {
-		err = errors.Wrapf(err, "Failed to store cloud locations results for deployment %s node %s",
-			e.DeploymentID, e.NodeName)
-		return cloudLocations, hpcLocations, err
-	}
-	return cloudLocations, hpcLocations, err
-
-}
-
-func (e *SetLocationsExecution) assignCloudLocations(ctx context.Context, requirements map[string]CloudRequirement, locations map[string]CloudLocation) error {
-
-	var err error
-	for nodeName, req := range requirements {
-		location, ok := locations[nodeName]
-		if !ok {
-			if req.Optional {
-				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-					"No available location for optional compute instance %s in deployment %s", nodeName, e.DeploymentID)
-				err = e.setCloudLocationSkipped(ctx, nodeName)
-				if err != nil {
-					return err
-				}
-			} else {
-				return errors.Errorf("No available location found for compute instance %s in deployment %s", nodeName, e.DeploymentID)
-			}
-		}
-		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-			"Location for %s: %s", nodeName, location.Name)
-
-		err = e.setCloudLocation(ctx, nodeName, req, location)
-
-	}
-	return err
-}
-
-func (e *SetLocationsExecution) assignHPCLocations(ctx context.Context, requirements map[string]HPCRequirement, locations map[string]HPCLocation) error {
-
-	var err error
-	for nodeName, req := range requirements {
-		location, ok := locations[nodeName]
-		if !ok {
-			if req.Optional {
-				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-					"No available location for optional compute instance %s in deployment %s", nodeName, e.DeploymentID)
-				err = e.setHPCLocationSkipped(ctx, nodeName)
-				if err != nil {
-					return err
-				}
-			} else {
-				return errors.Errorf("No available location found for compute instance %s in deployment %s", nodeName, e.DeploymentID)
-			}
-		}
-		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-			"Location for %s: %s", nodeName, location.Name)
-
-		err = e.setHPCLocation(ctx, nodeName, req, location)
-
-	}
-	return err
-}
-
-// setCloudLocation updates the deployment description of a compute instance for a new location
-func (e *SetLocationsExecution) setCloudLocation(ctx context.Context, nodeName string, requirement CloudRequirement, location CloudLocation) error {
-
-	nodeTemplate, err := e.getStoredNodeTemplate(ctx, nodeName)
-	if err != nil {
-		return err
-	}
-
-	// Add the new location in this node template metadata
-	newLocationName := location.Name + "_openstack"
-	if nodeTemplate.Metadata == nil {
-		nodeTemplate.Metadata = make(map[string]string)
-	}
-	nodeTemplate.Metadata[tosca.MetadataLocationNameKey] = newLocationName
-	// Update the flavor
-	flavorVal := tosca.ValueAssignment{
-		Type:  tosca.ValueAssignmentLiteral,
-		Value: location.Flavor,
-	}
-	nodeTemplate.Properties["flavorName"] = &flavorVal
-
-	// Update to boot volume image ID
-	val, ok := nodeTemplate.Properties["boot_volume"]
-	if !ok {
-		return errors.Errorf("Found no boot volume defined for node %s in deployment %s", nodeName, e.DeploymentID)
-	}
-	bootVolume := val.GetMap()
-	bootVolume["uuid"] = location.ImageID
-	volumeVal := tosca.ValueAssignment{
-		Type:  tosca.ValueAssignmentMap,
-		Value: bootVolume,
-	}
-	nodeTemplate.Properties["boot_volume"] = &volumeVal
-
-	// Update the user in credentials
-	val, ok = nodeTemplate.Capabilities["endpoint"].Properties["credentials"]
-	if !ok {
-		return errors.Errorf("Found no credentials defined for node %s in deployment %s", nodeName, e.DeploymentID)
-	}
-	creds := val.GetMap()
-	creds["user"] = location.User
-	credsVal := tosca.ValueAssignment{
-		Type:  tosca.ValueAssignmentMap,
-		Value: creds,
-	}
-
-	nodeTemplate.Capabilities["endpoint"].Properties["credentials"] = &credsVal
-
-	// Location is now changed for this node template, storing it
-	err = e.storeNodeTemplate(ctx, nodeName, nodeTemplate)
-	if err != nil {
-		return err
-	}
-
-	// Update the associated Floating IP Node location
-	var floatingIPNodeName string
-	for _, nodeReq := range nodeTemplate.Requirements {
-		for _, reqAssignment := range nodeReq {
-			if reqAssignment.Capability == fipConnectivityCapability {
-				floatingIPNodeName = reqAssignment.Node
-				break
-			}
-		}
-	}
-	if floatingIPNodeName == "" {
-		// No associated floating IP pool to change, locations changes are done now
-		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-			"No floating IP associated to compute instance %s in deployment %s", nodeName, e.DeploymentID)
-		return err
-	}
-
-	fipNodeTemplate, err := e.getStoredNodeTemplate(ctx, floatingIPNodeName)
-	if err != nil {
-		return err
-	}
-	if fipNodeTemplate.Metadata == nil {
-		fipNodeTemplate.Metadata = make(map[string]string)
-	}
-	fipNodeTemplate.Metadata[tosca.MetadataLocationNameKey] = newLocationName
-
-	// Update as well the Floating IP pool
-	poolVal := tosca.ValueAssignment{
-		Type:  tosca.ValueAssignmentLiteral,
-		Value: location.FloatingIPPool,
-	}
-	fipNodeTemplate.Properties["floating_network_name"] = &poolVal
-
-	// Location is now changed for this node template, storing it
-	err = e.storeNodeTemplate(ctx, floatingIPNodeName, fipNodeTemplate)
-	if err != nil {
-		return err
-	}
-
-	events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-		"Floating IP pool is %s for %s in deployment %s", location.FloatingIPPool, floatingIPNodeName, e.DeploymentID)
-
-	return err
-}
-
-// setCloudLocationSkipped updates the deployment description of a compute instance that has to be skipped
-func (e *SetLocationsExecution) setCloudLocationSkipped(ctx context.Context, nodeName string) error {
-	return errors.Errorf("Skipping a cloud compute instance without location not yet implemented")
-}
-
-// setHPCLocation updates the deployment description of a HPC job for a new location
-func (e *SetLocationsExecution) setHPCLocation(ctx context.Context, nodeName string, requirement HPCRequirement, location HPCLocation) error {
-
-	nodeTemplate, err := e.getStoredNodeTemplate(ctx, nodeName)
-	if err != nil {
-		return err
-	}
-
-	// Add the new location in this node template metadata
-	newLocationName := location.Name + "_heappe"
-	if nodeTemplate.Metadata == nil {
-		nodeTemplate.Metadata = make(map[string]string)
-	}
-	nodeTemplate.Metadata[tosca.MetadataLocationNameKey] = newLocationName
-
-	// Update the job specification
-	jobSpecVal, ok := nodeTemplate.Properties["JobSpecification"]
-	if !ok {
-		return errors.Errorf("Found no property JobSpecification in Node Template %+v", nodeTemplate)
-	}
-	jobSpecMap := jobSpecVal.GetMap()
-	jobSpecMap["Project"] = location.Project
-
-	// Update the tasks
-	tasksVal, ok := jobSpecMap["Tasks"]
-	if !ok {
-		return errors.Errorf("Found no property Tasks in Node Template %+v", nodeTemplate)
-	}
-	tasksArray, _ := tasksVal.([]interface{})
-	for taskName, taskLocation := range location.TasksLocation {
-		for _, task := range tasksArray {
-			tMap, _ := task.(map[string]interface{})
-			if taskName == tMap["Name"] {
-				tMap["ClusterNodeTypeId"] = taskLocation.NodeTypeID
-				tMap["CommandTemplateId"] = taskLocation.CommandTemplateID
-				break
-			}
-		}
-	}
-
-	jobSpecMap["Tasks"] = tasksArray
-
-	jobSpecVal, err = tosca.ToValueAssignment(jobSpecMap)
-	if err != nil {
-		return errors.Wrapf(err, "Failed to translate map to value assignment: %+v", jobSpecMap)
-	}
-	nodeTemplate.Properties["JobSpecification"] = jobSpecVal
-
-	// Location is now changed for this node template, storing it
-	err = e.storeNodeTemplate(ctx, nodeName, nodeTemplate)
-	if err != nil {
-		return err
-	}
-
-	return err
-}
-
-// setHPCLocationSkipped updates the deployment description of a compute instance that has to be skipped
-func (e *SetLocationsExecution) setHPCLocationSkipped(ctx context.Context, nodeName string) error {
-	return errors.Errorf("Skipping a HPC job without location not yet implemented")
-}
-
-// getStoredNodeTemplate returns the description of a node stored by Yorc
-func (e *SetLocationsExecution) getStoredNodeTemplate(ctx context.Context, nodeName string) (*tosca.NodeTemplate, error) {
-	node := new(tosca.NodeTemplate)
-	nodePath := path.Join(consulutil.DeploymentKVPrefix, e.DeploymentID, "topology", "nodes", nodeName)
-	found, err := storage.GetStore(storageTypes.StoreTypeDeployment).Get(nodePath, node)
-	if !found {
-		err = errors.Errorf("No such node %s in deployment %s", nodeName, e.DeploymentID)
-	}
-	return node, err
-}
-
-// storeNodeTemplate stores a node template in Yorc
-func (e *SetLocationsExecution) storeNodeTemplate(ctx context.Context, nodeName string, nodeTemplate *tosca.NodeTemplate) error {
-	nodePrefix := path.Join(consulutil.DeploymentKVPrefix, e.DeploymentID, "topology", "nodes", nodeName)
-	return storage.GetStore(storageTypes.StoreTypeDeployment).Set(ctx, nodePrefix, nodeTemplate)
 }

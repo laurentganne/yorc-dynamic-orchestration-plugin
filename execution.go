@@ -22,11 +22,15 @@ import (
 
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/locations"
 	"github.com/ystia/yorc/v4/prov"
 )
 
 const (
-	setLocationsComponentType = "org.lexis.common.dynamic.orchestration.nodes.SetLocations"
+	ddiInfrastructureType                 = "ddi"
+	locationDefaultMonitoringTimeInterval = 5 * time.Second
+	locationJobMonitoringTimeInterval     = "job_monitoring_time_interval"
+	setLocationsComponentType             = "org.lexis.common.dynamic.orchestration.nodes.SetLocations"
 )
 
 // Execution is the interface holding functions to execute an operation
@@ -56,6 +60,22 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 		return exec, errors.Errorf("No value provided for deployement %s node %s proerty token", deploymentID, nodeName)
 	}
 
+	locationMgr, err := locations.GetManager(cfg)
+	if err != nil {
+		return nil, err
+	}
+	locationProps, err := locationMgr.GetLocationPropertiesForNode(ctx,
+		deploymentID, nodeName, ddiInfrastructureType)
+	if err != nil {
+		return nil, err
+	}
+
+	monitoringTimeInterval := locationProps.GetDuration(locationJobMonitoringTimeInterval)
+	if monitoringTimeInterval <= 0 {
+		// Default value
+		monitoringTimeInterval = locationDefaultMonitoringTimeInterval
+	}
+
 	isSetLocationsComponent, err := deployments.IsNodeDerivedFrom(ctx, deploymentID, nodeName, setLocationsComponentType)
 	if err != nil {
 		return exec, err
@@ -63,12 +83,14 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 
 	if isSetLocationsComponent {
 		exec = &SetLocationsExecution{
-			KV:           kv,
-			Cfg:          cfg,
-			DeploymentID: deploymentID,
-			TaskID:       taskID,
-			NodeName:     nodeName,
-			Operation:    operation,
+			KV:                     kv,
+			Cfg:                    cfg,
+			DeploymentID:           deploymentID,
+			TaskID:                 taskID,
+			NodeName:               nodeName,
+			Operation:              operation,
+			MonitoringTimeInterval: monitoringTimeInterval,
+			Token:                  token,
 		}
 		return exec, exec.ResolveExecution(ctx)
 	}

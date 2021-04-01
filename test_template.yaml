@@ -158,7 +158,7 @@ topology_template:
             - call_operation: Configure.pre_configure_source
           on_success:
             - SetLocations_SecondVM_pre_configure_source
-            - SetLocations_start
+            - SetLocations_submit
         SetLocations_SecondVM_pre_configure_source:
           target: SetLocations
           target_relationship: CloudResourceSecondVM
@@ -167,7 +167,7 @@ topology_template:
             - call_operation: Configure.pre_configure_source
           on_success:
             - SetLocations_DatasetInfo_pre_configure_source
-            - SetLocations_start
+            - SetLocations_submit
         SetLocations_DatasetInfo_pre_configure_source:
           target: SetLocations
           target_relationship: InputDataset
@@ -176,7 +176,7 @@ topology_template:
             - call_operation: Configure.pre_configure_source
           on_success:
             - SetLocations_HPCJob_pre_configure_source
-            - SetLocations_start
+            - SetLocations_submit
         SetLocations_HPCJob_pre_configure_source:
           target: SetLocations
           target_relationship: HPCResourceHPCJob
@@ -184,17 +184,23 @@ topology_template:
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_start
-        SetLocations_start:
+            - SetLocations_submit
+        SetLocations_submit:
           target: SetLocations
           activities:
-            - call_operation: Standard.start
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.submit
           on_success:
-            - SetLocations_started
-        SetLocations_started:
+            - SetLocations_run
+        SetLocations_run:
           target: SetLocations
           activities:
-            - set_state: started
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.run
+          on_success:
+            - SetLocations_executed
+        SetLocations_executed:
+          target: SetLocations
+          activities:
+            - set_state: executed
     Run:
       steps:
         InputDatasetInfoJob_submit:
@@ -225,7 +231,7 @@ topology_template:
             - call_operation: Configure.pre_configure_source
           on_success:
             - SetLocations_SecondVM_pre_configure_source
-            - SetLocations_start
+            - SetLocations_submit
         SetLocations_SecondVM_pre_configure_source:
           target: SetLocations
           target_relationship: CloudResourceSecondVM
@@ -234,7 +240,7 @@ topology_template:
             - call_operation: Configure.pre_configure_source
           on_success:
             - SetLocations_DatasetInfo_pre_configure_source
-            - SetLocations_start
+            - SetLocations_submit
         SetLocations_DatasetInfo_pre_configure_source:
           target: SetLocations
           target_relationship: InputDataset
@@ -242,17 +248,23 @@ topology_template:
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_start
-        SetLocations_start:
+            - SetLocations_submit
+        SetLocations_submit:
           target: SetLocations
           activities:
-            - call_operation: Standard.start
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.submit
           on_success:
-            - SetLocations_started
-        SetLocations_started:
+            - SetLocations_run
+        SetLocations_run:
           target: SetLocations
           activities:
-            - set_state: started
+            - call_operation: tosca.interfaces.node.lifecycle.Runnable.run
+          on_success:
+            - SetLocations_executed
+        SetLocations_executed:
+          target: SetLocations
+          activities:
+            - set_state: executed
           on_success:
             - FloatingIP1_install
         FloatingIP1_install:

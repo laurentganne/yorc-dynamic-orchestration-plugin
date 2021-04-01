@@ -162,6 +162,10 @@ node_types:
       hpc_locations:
         type: map
         description: Locations to use for HPC jobs
+      request_id:
+        type: string
+        description: >
+          ID of the request to compute the best locations
     requirements:
       - cloud_instance:
           capability: tosca.capabilities.OperatingSystem
@@ -179,10 +183,14 @@ node_types:
           relationship: org.lexis.common.dynamic.orchestration.relationships.Dataset
           occurrences: [0, UNBOUNDED]
     interfaces:
-      Standard:
-        start:
-          inputs:
-            TOKEN: { get_property: [SELF, token] }
+      tosca.interfaces.node.lifecycle.Runnable:
+        inputs:
+          TOKEN: { get_property: [SELF, token] }
+        submit:
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook
+        run:
           implementation:
             file: dynamic-orchestration-types-a4c.yaml
             type: org.alien4cloud.artifacts.AnsiblePlaybook
