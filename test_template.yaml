@@ -97,7 +97,7 @@ topology_template:
         token: { get_input: token }
         JobSpecification: { get_input: computation_heappe_job }
     SetLocations:
-      type: org.lexis.common.dynamic.orchestration.nodes.SetLocations
+      type: org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob
       properties:
         token: { get_input: token }
       requirements:

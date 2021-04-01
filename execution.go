@@ -30,7 +30,7 @@ const (
 	ddiInfrastructureType                 = "ddi"
 	locationDefaultMonitoringTimeInterval = 5 * time.Second
 	locationJobMonitoringTimeInterval     = "job_monitoring_time_interval"
-	setLocationsComponentType             = "org.lexis.common.dynamic.orchestration.nodes.SetLocations"
+	setLocationsComponentType             = "org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob"
 )
 
 // Execution is the interface holding functions to execute an operation

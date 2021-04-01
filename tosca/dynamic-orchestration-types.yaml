@@ -142,7 +142,7 @@ artifact_types:
   org.lexis.common.dynamic.orchestration.artifacts.Deployment:
     derived_from: tosca.artifacts.Deployment
 node_types:
-  org.lexis.common.dynamic.orchestration.nodes.SetLocations:
+  org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob:
     derived_from: tosca.nodes.Root
     description: >
       Set locations of Intrastructures resources nodes to allocate
@@ -198,7 +198,6 @@ node_types:
           relationship: org.lexis.common.dynamic.orchestration.relationships.Dataset
           occurrences: [0, UNBOUNDED]
     interfaces:
-      Standard:
       tosca.interfaces.node.lifecycle.Runnable:
         inputs:
           TOKEN: { get_property: [SELF, token] }

@@ -137,7 +137,7 @@ artifact_types:
   org.alien4cloud.artifacts.AnsiblePlaybook:
     derived_from: tosca.artifacts.Root
 node_types:
-  org.lexis.common.dynamic.orchestration.nodes.SetLocations:
+  org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob:
     derived_from: tosca.nodes.Root
     description: >
       Set locations of Intrastructures resources nodes to allocate
