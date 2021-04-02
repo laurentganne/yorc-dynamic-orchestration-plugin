@@ -263,5 +263,5 @@ relationship_types:
             NUMBER_OF_FILES: { get_attribute: [TARGET, dataset_info, number_of_files] }
             NUMBER_OF_SMALL_FILES: { get_attribute: [TARGET, dataset_info, number_of_small_files] }
           implementation:
-            file: dynamic-orchestration-types-a4c.yaml
-            type: org.alien4cloud.artifacts.AnsiblePlaybook
+            file: "embedded"
+            type: org.lexis.common.dynamic.orchestration.artifacts.Deployment
