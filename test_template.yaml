@@ -89,6 +89,16 @@ topology_template:
         os:
           properties:
             type: linux
+    GetComputeDatasetInfo:
+      type: org.lexis.common.ddi.nodes.GetComputeInstanceDatasetInfo
+      properties:
+        dataset_path: "/usr"
+      requirements:
+        - host:
+            type_requirement: host
+            node: FirstVM
+            capability: tosca.capabilities.Container
+            relationship: tosca.relationships.HostedOn
     HPCJob:
       type: org.lexis.common.heappe.nodes.Job
       metadata:
@@ -96,7 +106,7 @@ topology_template:
       properties:
         token: { get_input: token }
         JobSpecification: { get_input: computation_heappe_job }
-    SetLocations:
+    FindLocations:
       type: org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob
       properties:
         token: { get_input: token }
@@ -124,8 +134,8 @@ topology_template:
   workflows:
     install:
       steps:
-        SetLocations_initial:
-          target: SetLocations
+        FindLocations_initial:
+          target: FindLocations
           activities:
             - set_state: initial
     SetLocationTest:
@@ -149,56 +159,56 @@ topology_template:
           activities:
             - set_state: executed
           on_success:
-            - SetLocations_FirstVM_pre_configure_source
-        SetLocations_FirstVM_pre_configure_source:
-          target: SetLocations
+            - FindLocations_FirstVM_pre_configure_source
+        FindLocations_FirstVM_pre_configure_source:
+          target: FindLocations
           target_relationship: CloudResourceFirstVM
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_SecondVM_pre_configure_source
-            - SetLocations_submit
-        SetLocations_SecondVM_pre_configure_source:
-          target: SetLocations
+            - FindLocations_SecondVM_pre_configure_source
+            - FindLocations_submit
+        FindLocations_SecondVM_pre_configure_source:
+          target: FindLocations
           target_relationship: CloudResourceSecondVM
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_DatasetInfo_pre_configure_source
-            - SetLocations_submit
-        SetLocations_DatasetInfo_pre_configure_source:
-          target: SetLocations
+            - FindLocations_DatasetInfo_pre_configure_source
+            - FindLocations_submit
+        FindLocations_DatasetInfo_pre_configure_source:
+          target: FindLocations
           target_relationship: InputDataset
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_HPCJob_pre_configure_source
-            - SetLocations_submit
-        SetLocations_HPCJob_pre_configure_source:
-          target: SetLocations
+            - FindLocations_HPCJob_pre_configure_source
+            - FindLocations_submit
+        FindLocations_HPCJob_pre_configure_source:
+          target: FindLocations
           target_relationship: HPCResourceHPCJob
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_submit
-        SetLocations_submit:
-          target: SetLocations
+            - FindLocations_submit
+        FindLocations_submit:
+          target: FindLocations
           activities:
             - call_operation: tosca.interfaces.node.lifecycle.Runnable.submit
           on_success:
-            - SetLocations_run
-        SetLocations_run:
-          target: SetLocations
+            - FindLocations_run
+        FindLocations_run:
+          target: FindLocations
           activities:
             - call_operation: tosca.interfaces.node.lifecycle.Runnable.run
           on_success:
-            - SetLocations_executed
-        SetLocations_executed:
-          target: SetLocations
+            - FindLocations_executed
+        FindLocations_executed:
+          target: FindLocations
           activities:
             - set_state: executed
     Run:
@@ -222,47 +232,47 @@ topology_template:
           activities:
             - set_state: executed
           on_success:
-            - SetLocations_FirstVM_pre_configure_source
-        SetLocations_FirstVM_pre_configure_source:
-          target: SetLocations
+            - FindLocations_FirstVM_pre_configure_source
+        FindLocations_FirstVM_pre_configure_source:
+          target: FindLocations
           target_relationship: CloudResourceFirstVM
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_SecondVM_pre_configure_source
-            - SetLocations_submit
-        SetLocations_SecondVM_pre_configure_source:
-          target: SetLocations
+            - FindLocations_SecondVM_pre_configure_source
+            - FindLocations_submit
+        FindLocations_SecondVM_pre_configure_source:
+          target: FindLocations
           target_relationship: CloudResourceSecondVM
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_DatasetInfo_pre_configure_source
-            - SetLocations_submit
-        SetLocations_DatasetInfo_pre_configure_source:
-          target: SetLocations
+            - FindLocations_DatasetInfo_pre_configure_source
+            - FindLocations_submit
+        FindLocations_DatasetInfo_pre_configure_source:
+          target: FindLocations
           target_relationship: InputDataset
           operation_host: ORCHESTRATOR
           activities:
             - call_operation: Configure.pre_configure_source
           on_success:
-            - SetLocations_submit
-        SetLocations_submit:
-          target: SetLocations
+            - FindLocations_submit
+        FindLocations_submit:
+          target: FindLocations
           activities:
             - call_operation: tosca.interfaces.node.lifecycle.Runnable.submit
           on_success:
-            - SetLocations_run
-        SetLocations_run:
-          target: SetLocations
+            - FindLocations_run
+        FindLocations_run:
+          target: FindLocations
           activities:
             - call_operation: tosca.interfaces.node.lifecycle.Runnable.run
           on_success:
-            - SetLocations_executed
-        SetLocations_executed:
-          target: SetLocations
+            - FindLocations_executed
+        FindLocations_executed:
+          target: FindLocations
           activities:
             - set_state: executed
           on_success:
@@ -277,3 +287,21 @@ topology_template:
           target: FirstVM
           activities:
             - delegate: install
+          on_success:
+            - GetComputeDatasetInfo_create
+        GetComputeDatasetInfo_create:
+          target: GetComputeDatasetInfo
+          activities:
+            - call_operation: Standard.create
+          on_success:
+            - GetComputeDatasetInfo_start
+        GetComputeDatasetInfo_start:
+          target: GetComputeDatasetInfo
+          activities:
+            - call_operation: Standard.start
+          on_success:
+            - GetComputeDatasetInfo_started
+        GetComputeDatasetInfo_started:
+          target: GetComputeDatasetInfo
+          activities:
+            - set_state: started

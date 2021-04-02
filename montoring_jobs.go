@@ -394,7 +394,7 @@ func (o *ActionOperator) assignHPCLocations(ctx context.Context, deploymentID st
 // setCloudLocation updates the deployment description of a compute instance for a new location
 func (o *ActionOperator) setCloudLocation(ctx context.Context, deploymentID, nodeName string, requirement CloudRequirement, location CloudLocation) error {
 
-	nodeTemplate, err := o.getStoredNodeTemplate(ctx, deploymentID, nodeName)
+	nodeTemplate, err := getStoredNodeTemplate(ctx, deploymentID, nodeName)
 	if err != nil {
 		return err
 	}
@@ -440,7 +440,7 @@ func (o *ActionOperator) setCloudLocation(ctx context.Context, deploymentID, nod
 	nodeTemplate.Capabilities["endpoint"].Properties["credentials"] = &credsVal
 
 	// Location is now changed for this node template, storing it
-	err = o.storeNodeTemplate(ctx, deploymentID, nodeName, nodeTemplate)
+	err = storeNodeTemplate(ctx, deploymentID, nodeName, nodeTemplate)
 	if err != nil {
 		return err
 	}
@@ -462,7 +462,7 @@ func (o *ActionOperator) setCloudLocation(ctx context.Context, deploymentID, nod
 		return err
 	}
 
-	fipNodeTemplate, err := o.getStoredNodeTemplate(ctx, deploymentID, floatingIPNodeName)
+	fipNodeTemplate, err := getStoredNodeTemplate(ctx, deploymentID, floatingIPNodeName)
 	if err != nil {
 		return err
 	}
@@ -479,7 +479,7 @@ func (o *ActionOperator) setCloudLocation(ctx context.Context, deploymentID, nod
 	fipNodeTemplate.Properties["floating_network_name"] = &poolVal
 
 	// Location is now changed for this node template, storing it
-	err = o.storeNodeTemplate(ctx, deploymentID, floatingIPNodeName, fipNodeTemplate)
+	err = storeNodeTemplate(ctx, deploymentID, floatingIPNodeName, fipNodeTemplate)
 	if err != nil {
 		return err
 	}
@@ -499,7 +499,7 @@ func (o *ActionOperator) setCloudLocationSkipped(ctx context.Context, nodeName s
 func (o *ActionOperator) setHPCLocation(ctx context.Context, deploymentID, nodeName string,
 	requirement HPCRequirement, location HPCLocation) error {
 
-	nodeTemplate, err := o.getStoredNodeTemplate(ctx, deploymentID, nodeName)
+	nodeTemplate, err := getStoredNodeTemplate(ctx, deploymentID, nodeName)
 	if err != nil {
 		return err
 	}
@@ -545,7 +545,7 @@ func (o *ActionOperator) setHPCLocation(ctx context.Context, deploymentID, nodeN
 	nodeTemplate.Properties["JobSpecification"] = jobSpecVal
 
 	// Location is now changed for this node template, storing it
-	err = o.storeNodeTemplate(ctx, deploymentID, nodeName, nodeTemplate)
+	err = storeNodeTemplate(ctx, deploymentID, nodeName, nodeTemplate)
 	if err != nil {
 		return err
 	}
@@ -559,7 +559,7 @@ func (o *ActionOperator) setHPCLocationSkipped(ctx context.Context, nodeName str
 }
 
 // getStoredNodeTemplate returns the description of a node stored by Yorc
-func (o *ActionOperator) getStoredNodeTemplate(ctx context.Context, deploymentID, nodeName string) (*tosca.NodeTemplate, error) {
+func getStoredNodeTemplate(ctx context.Context, deploymentID, nodeName string) (*tosca.NodeTemplate, error) {
 	node := new(tosca.NodeTemplate)
 	nodePath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology", "nodes", nodeName)
 	found, err := storage.GetStore(storageTypes.StoreTypeDeployment).Get(nodePath, node)
@@ -570,7 +570,7 @@ func (o *ActionOperator) getStoredNodeTemplate(ctx context.Context, deploymentID
 }
 
 // storeNodeTemplate stores a node template in Yorc
-func (o *ActionOperator) storeNodeTemplate(ctx context.Context, deploymentID, nodeName string, nodeTemplate *tosca.NodeTemplate) error {
+func storeNodeTemplate(ctx context.Context, deploymentID, nodeName string, nodeTemplate *tosca.NodeTemplate) error {
 	nodePrefix := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology", "nodes", nodeName)
 	return storage.GetStore(storageTypes.StoreTypeDeployment).Set(ctx, nodePrefix, nodeTemplate)
 }

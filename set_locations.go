@@ -45,6 +45,12 @@ const (
 	cloudLocationsConsulAttribute    = "cloud_locations"
 	hpcLocationsConsulAttribute      = "hpc_locations"
 	datasetReqConsulAttribute        = "input_dataset"
+	osCapability                     = "tosca.capabilities.OperatingSystem"
+	heappeJobCapability              = "org.lexis.common.heappe.capabilities.HeappeJob"
+	datasetInfoCapability            = "org.lexis.common.ddi.capabilities.DatasetInfo"
+	hostCapabilityName               = "host"
+	osCapabilityName                 = "os"
+	datasetInfoCapabilityName        = "dataset_info"
 )
 
 // SetLocationsExecution holds Locations computation properties
@@ -141,7 +147,6 @@ type DatasetRequirement struct {
 	Size               string   `json:"size"`
 }
 
-// ExecuteAsync is not supported here
 func (e *SetLocationsExecution) ExecuteAsync(ctx context.Context) (*prov.Action, time.Duration, error) {
 	if strings.ToLower(e.Operation.Name) != tosca.RunnableRunOperationName {
 		return nil, 0, errors.Errorf("Unsupported asynchronous operation %q", e.Operation.Name)
@@ -185,7 +190,7 @@ func (e *SetLocationsExecution) Execute(ctx context.Context) error {
 	case "configure.pre_configure_source":
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 			"New target for %q", e.NodeName)
-		return e.addTarget(ctx)
+		// return e.addTarget(ctx)
 	case tosca.RunnableSubmitOperationName:
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 			"%s submitting request to compute best location by", e.NodeName)
@@ -214,10 +219,17 @@ func (e *SetLocationsExecution) Execute(ctx context.Context) error {
 }
 
 func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Context) error {
+
+	// Find associated targets for which to update the locations
+	err := e.findAssociatedTargets(ctx)
+	if err != nil {
+		return err
+	}
+
 	// TODO: call the Business logic
 	requestID := "test_request_id"
 	// Store the request id
-	err := deployments.SetAttributeForAllInstances(ctx, e.DeploymentID, e.NodeName,
+	err = deployments.SetAttributeForAllInstances(ctx, e.DeploymentID, e.NodeName,
 		requestIDConsulAttribute, requestID)
 	if err != nil {
 		return errors.Wrapf(err, "Request %s submitted, but failed to store this request id", requestID)
@@ -288,6 +300,186 @@ func (e *SetLocationsExecution) addTarget(ctx context.Context) error {
 		return e.addDatasetTarget(ctx)
 	}
 	return err
+}
+
+// findAssociatedTarget finds which compute instances, datasets and HPC jobs are
+// associated to this component
+func (e *SetLocationsExecution) findAssociatedTargets(ctx context.Context) error {
+	nodeTemplate, err := getStoredNodeTemplate(ctx, e.DeploymentID, e.NodeName)
+	if err != nil {
+		return err
+	}
+
+	// Get the associated targets
+	cloudReqs := make(map[string]CloudRequirement)
+	hpcReqs := make(map[string]HPCRequirement)
+	datasetReqs := make(map[string]DatasetRequirement)
+	for _, nodeReq := range nodeTemplate.Requirements {
+		for _, reqAssignment := range nodeReq {
+			switch reqAssignment.Capability {
+			case osCapability:
+				req, err := e.getCloudRequirement(ctx, reqAssignment.Node)
+				if err != nil {
+					return err
+				}
+				req.Optional = (reqAssignment.Relationship == optionalCloudTargetRelationship)
+				cloudReqs[reqAssignment.Node] = req
+			case heappeJobCapability:
+				req, err := e.getHPCRequirement(ctx, reqAssignment.Node)
+				if err != nil {
+					return err
+				}
+				req.Optional = (reqAssignment.Relationship == optionalHEAppETargetRelationship)
+				hpcReqs[reqAssignment.Node] = req
+			case datasetInfoCapability:
+				req, err := e.getDatasetRequirement(ctx, reqAssignment.Node)
+				if err != nil {
+					return err
+				}
+				datasetReqs[reqAssignment.Node] = req
+
+			default:
+				// Ignoring
+			}
+		}
+	}
+
+	// Store collected requirements
+	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		cloudReqConsulAttribute, cloudReqs)
+	if err != nil {
+		err = errors.Wrapf(err, "Failed to store cloud requirement details for deployment %s node %s",
+			e.DeploymentID, e.NodeName)
+		return err
+	}
+	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		hpcReqConsulAttribute, hpcReqs)
+	if err != nil {
+		err = errors.Wrapf(err, "Failed to store HPC requirement details for deployment %s node %s",
+			e.DeploymentID, e.NodeName)
+		return err
+	}
+	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		datasetReqConsulAttribute, datasetReqs)
+	if err != nil {
+		err = errors.Wrapf(err, "Failed to store dataset requirement details for deployment %s node %s",
+			e.DeploymentID, e.NodeName)
+		return err
+	}
+
+	return err
+}
+
+// getCloudRequirement finds requirements of a cloud compute instance
+func (e *SetLocationsExecution) getCloudRequirement(ctx context.Context, targetName string) (CloudRequirement, error) {
+	var cloudReq CloudRequirement
+	var err error
+
+	// Get host capability properties
+	var stringPropNames = []struct {
+		field    *string
+		propName string
+	}{
+		{field: &(cloudReq.NumCPUs), propName: "num_cpus"},
+		{field: &(cloudReq.MemSize), propName: "mem_size"},
+		{field: &(cloudReq.DiskSize), propName: "disk_size"},
+	}
+	for _, stringPropName := range stringPropNames {
+		val, err := deployments.GetCapabilityPropertyValue(ctx, e.DeploymentID,
+			targetName, hostCapabilityName, stringPropName.propName)
+		if err != nil {
+			return cloudReq, err
+		}
+		if val != nil {
+			*(stringPropName.field) = val.RawString()
+		}
+	}
+
+	// Get os capability properties
+	stringPropNames = []struct {
+		field    *string
+		propName string
+	}{
+		{field: &(cloudReq.OSType), propName: "type"},
+		{field: &(cloudReq.OSDistribution), propName: "distribution"},
+		{field: &(cloudReq.OSVersion), propName: "version"},
+	}
+	for _, stringPropName := range stringPropNames {
+		val, err := deployments.GetCapabilityPropertyValue(ctx, e.DeploymentID,
+			targetName, osCapabilityName, stringPropName.propName)
+		if err != nil {
+			return cloudReq, err
+		}
+		if val != nil {
+			*(stringPropName.field) = val.RawString()
+		}
+	}
+
+	return cloudReq, err
+}
+
+// getHPCRequirement finds requirements of a cloud compute instance
+func (e *SetLocationsExecution) getHPCRequirement(ctx context.Context, targetName string) (HPCRequirement, error) {
+	var hpcReq HPCRequirement
+	val, err := deployments.GetNodePropertyValue(ctx, e.DeploymentID, targetName, "JobSpecification")
+	if err != nil {
+		return hpcReq, err
+	}
+	if val != nil {
+		err = json.Unmarshal([]byte(val.RawString()), &hpcReq)
+		if err != nil {
+			err = errors.Wrapf(err, "Failed to unmarshal heappe job from string %s", val.RawString())
+		}
+	}
+
+	return hpcReq, err
+}
+
+// getDatasetRequirement finds requirements of a dataset
+func (e *SetLocationsExecution) getDatasetRequirement(ctx context.Context, targetName string) (DatasetRequirement, error) {
+	var datasetReq DatasetRequirement
+	var err error
+
+	ids, err := deployments.GetNodeInstancesIds(ctx, e.DeploymentID, targetName)
+	if err != nil {
+		return datasetReq, err
+	}
+
+	// Get string properties
+	var stringPropNames = []struct {
+		field    *string
+		propName string
+	}{
+		{field: &(datasetReq.Size), propName: "size"},
+		{field: &(datasetReq.NumberOfFiles), propName: "number_of_files"},
+		{field: &(datasetReq.NumberOfSmallFiles), propName: "number_of_small_files"},
+	}
+	for _, stringPropName := range stringPropNames {
+		val, err := deployments.GetInstanceCapabilityAttributeValue(ctx, e.DeploymentID,
+			targetName, ids[0], datasetInfoCapabilityName, stringPropName.propName)
+		if err != nil {
+			return datasetReq, err
+		}
+		if val != nil {
+			*(stringPropName.field) = val.RawString()
+		}
+
+	}
+
+	// Get locations property
+	val, err := deployments.GetInstanceCapabilityAttributeValue(ctx, e.DeploymentID,
+		targetName, ids[0], datasetInfoCapabilityName, "locations")
+	if err != nil {
+		return datasetReq, err
+	}
+	if val != nil {
+		err = json.Unmarshal([]byte(val.RawString()), &datasetReq.Locations)
+		if err != nil {
+			err = errors.Wrapf(err, "Failed to unmarshal locations from string %s", val.RawString())
+		}
+	}
+
+	return datasetReq, err
 }
 
 // addCloudTarget is called when a new target is associated to this SetLocation component
