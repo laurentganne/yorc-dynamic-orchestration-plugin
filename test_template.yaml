@@ -159,41 +159,6 @@ topology_template:
           activities:
             - set_state: executed
           on_success:
-            - FindLocations_FirstVM_pre_configure_source
-        FindLocations_FirstVM_pre_configure_source:
-          target: FindLocations
-          target_relationship: CloudResourceFirstVM
-          operation_host: ORCHESTRATOR
-          activities:
-            - call_operation: Configure.pre_configure_source
-          on_success:
-            - FindLocations_SecondVM_pre_configure_source
-            - FindLocations_submit
-        FindLocations_SecondVM_pre_configure_source:
-          target: FindLocations
-          target_relationship: CloudResourceSecondVM
-          operation_host: ORCHESTRATOR
-          activities:
-            - call_operation: Configure.pre_configure_source
-          on_success:
-            - FindLocations_DatasetInfo_pre_configure_source
-            - FindLocations_submit
-        FindLocations_DatasetInfo_pre_configure_source:
-          target: FindLocations
-          target_relationship: InputDataset
-          operation_host: ORCHESTRATOR
-          activities:
-            - call_operation: Configure.pre_configure_source
-          on_success:
-            - FindLocations_HPCJob_pre_configure_source
-            - FindLocations_submit
-        FindLocations_HPCJob_pre_configure_source:
-          target: FindLocations
-          target_relationship: HPCResourceHPCJob
-          operation_host: ORCHESTRATOR
-          activities:
-            - call_operation: Configure.pre_configure_source
-          on_success:
             - FindLocations_submit
         FindLocations_submit:
           target: FindLocations
@@ -231,32 +196,6 @@ topology_template:
           target: InputDatasetInfoJob
           activities:
             - set_state: executed
-          on_success:
-            - FindLocations_FirstVM_pre_configure_source
-        FindLocations_FirstVM_pre_configure_source:
-          target: FindLocations
-          target_relationship: CloudResourceFirstVM
-          operation_host: ORCHESTRATOR
-          activities:
-            - call_operation: Configure.pre_configure_source
-          on_success:
-            - FindLocations_SecondVM_pre_configure_source
-            - FindLocations_submit
-        FindLocations_SecondVM_pre_configure_source:
-          target: FindLocations
-          target_relationship: CloudResourceSecondVM
-          operation_host: ORCHESTRATOR
-          activities:
-            - call_operation: Configure.pre_configure_source
-          on_success:
-            - FindLocations_DatasetInfo_pre_configure_source
-            - FindLocations_submit
-        FindLocations_DatasetInfo_pre_configure_source:
-          target: FindLocations
-          target_relationship: InputDataset
-          operation_host: ORCHESTRATOR
-          activities:
-            - call_operation: Configure.pre_configure_source
           on_success:
             - FindLocations_submit
         FindLocations_submit:
