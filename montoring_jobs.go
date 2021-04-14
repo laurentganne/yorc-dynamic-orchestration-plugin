@@ -51,7 +51,7 @@ const (
 
 	actionDataNodeName  = "nodeName"
 	actionDataRequestID = "requestID"
-	actionDataToken     = "token"
+	actionDataToken     = "accessToken"
 	actionDataTaskID    = "taskID"
 )
 
@@ -356,9 +356,9 @@ func (o *ActionOperator) assignCloudLocations(ctx context.Context, deploymentID 
 				return errors.Errorf("No available location found for compute instance %s in deployment %s", nodeName, deploymentID)
 			}
 		}
+		location.Name = location.Name + "_openstack"
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
 			"Location for %s: %s", nodeName, location.Name)
-
 		err = o.setCloudLocation(ctx, deploymentID, nodeName, req, location)
 
 	}
@@ -382,6 +382,7 @@ func (o *ActionOperator) assignHPCLocations(ctx context.Context, deploymentID st
 				return errors.Errorf("No available location found for compute instance %s in deployment %s", nodeName, deploymentID)
 			}
 		}
+		location.Name = location.Name + "_heappe"
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
 			"Location for %s: %s", nodeName, location.Name)
 
@@ -400,11 +401,10 @@ func (o *ActionOperator) setCloudLocation(ctx context.Context, deploymentID, nod
 	}
 
 	// Add the new location in this node template metadata
-	newLocationName := location.Name + "_openstack"
 	if nodeTemplate.Metadata == nil {
 		nodeTemplate.Metadata = make(map[string]string)
 	}
-	nodeTemplate.Metadata[tosca.MetadataLocationNameKey] = newLocationName
+	nodeTemplate.Metadata[tosca.MetadataLocationNameKey] = location.Name
 	// Update the flavor
 	flavorVal := tosca.ValueAssignment{
 		Type:  tosca.ValueAssignmentLiteral,
@@ -469,7 +469,7 @@ func (o *ActionOperator) setCloudLocation(ctx context.Context, deploymentID, nod
 	if fipNodeTemplate.Metadata == nil {
 		fipNodeTemplate.Metadata = make(map[string]string)
 	}
-	fipNodeTemplate.Metadata[tosca.MetadataLocationNameKey] = newLocationName
+	fipNodeTemplate.Metadata[tosca.MetadataLocationNameKey] = location.Name
 
 	// Update as well the Floating IP pool
 	poolVal := tosca.ValueAssignment{
@@ -505,11 +505,10 @@ func (o *ActionOperator) setHPCLocation(ctx context.Context, deploymentID, nodeN
 	}
 
 	// Add the new location in this node template metadata
-	newLocationName := location.Name + "_heappe"
 	if nodeTemplate.Metadata == nil {
 		nodeTemplate.Metadata = make(map[string]string)
 	}
-	nodeTemplate.Metadata[tosca.MetadataLocationNameKey] = newLocationName
+	nodeTemplate.Metadata[tosca.MetadataLocationNameKey] = location.Name
 
 	// Update the job specification
 	jobSpecVal, ok := nodeTemplate.Properties["JobSpecification"]

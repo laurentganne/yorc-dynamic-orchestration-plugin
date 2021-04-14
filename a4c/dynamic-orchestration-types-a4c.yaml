@@ -6,7 +6,7 @@ metadata:
   template_author: lexis
 
 imports:
-  - org.lexis.common.heappe-types:1.0.3
+  - org.lexis.common.heappe-types:1.0.6
   - org.lexis.common.ddi-types:0.1.3
 data_types:
   org.lexis.common.dynamic.orchestration.types.CloudRequirement:
@@ -142,7 +142,7 @@ node_types:
     description: >
       Set locations of Intrastructures resources nodes to allocate
     properties:
-      token:
+      accessToken:
         description: Access token
         type: string
         required: true
@@ -185,7 +185,7 @@ node_types:
     interfaces:
       tosca.interfaces.node.lifecycle.Runnable:
         inputs:
-          TOKEN: { get_property: [SELF, token] }
+          TOKEN: { get_property: [SELF, accessToken] }
         submit:
           implementation:
             file: dynamic-orchestration-types-a4c.yaml

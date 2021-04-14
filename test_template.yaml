@@ -10,13 +10,13 @@ description: "Dynamic orchestration test template"
 imports:
   - tosca-normative-types:1.0.0-ALIEN20
   - yorc-openstack-types:3.0.0
-  - org.lexis.common.heappe-types:1.0.3
+  - org.lexis.common.heappe-types:1.0.6
   - org.lexis.common.dynamic-orchestration-types:0.1.0
   - org.lexis.common.ddi-types:0.1.3
 
 topology_template:
   inputs:
-    token:
+    accessToken:
       type: string
       required: true
       description: "Access token"
@@ -50,7 +50,7 @@ topology_template:
     InputDatasetInfoJob:
       type: org.lexis.common.ddi.nodes.GetDDIDatasetInfoJob
       properties:
-        token: {get_input: token}
+        accessToken: {get_input: accessToken}
         dataset_path: {get_input: input_dataset_path}
     FloatingIP1:
       type: yorc.nodes.openstack.FloatingIP
@@ -104,12 +104,12 @@ topology_template:
       metadata:
         task: computation
       properties:
-        token: { get_input: token }
+        accessToken: { get_input: accessToken }
         JobSpecification: { get_input: computation_heappe_job }
     FindLocations:
       type: org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob
       properties:
-        token: { get_input: token }
+        accessToken: { get_input: accessToken }
       requirements:
         - InputDataset:
             type_requirement: input_dataset

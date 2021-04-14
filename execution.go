@@ -52,12 +52,12 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 	var exec Execution
 
 	// Get the required property, otken
-	token, err := deployments.GetStringNodePropertyValue(ctx, deploymentID, nodeName, "token")
+	token, err := deployments.GetStringNodePropertyValue(ctx, deploymentID, nodeName, "accessToken")
 	if err != nil {
 		return exec, err
 	}
 	if token == "" {
-		return exec, errors.Errorf("No value provided for deployement %s node %s proerty token", deploymentID, nodeName)
+		return exec, errors.Errorf("No value provided for deployement %s node %s property token", deploymentID, nodeName)
 	}
 
 	locationMgr, err := locations.GetManager(cfg)
