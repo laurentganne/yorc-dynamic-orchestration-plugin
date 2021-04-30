@@ -27,18 +27,14 @@ import (
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
-	"github.com/ystia/yorc/v4/helper/consulutil"
 	"github.com/ystia/yorc/v4/prov"
 	"github.com/ystia/yorc/v4/prov/operations"
 	"github.com/ystia/yorc/v4/tosca"
 )
 
 const (
-	cloudTargetRelationship          = "org.lexis.common.dynamic.orchestration.relationships.CloudResource"
 	optionalCloudTargetRelationship  = "org.lexis.common.dynamic.orchestration.relationships.OptionalCloudResource"
-	heappeTargetRelationship         = "org.lexis.common.dynamic.orchestration.relationships.HeappeJob"
 	optionalHEAppETargetRelationship = "org.lexis.common.dynamic.orchestration.relationships.OptionalHeappeJob"
-	datasetTargetRelationship        = "org.lexis.common.dynamic.orchestration.relationships.Dataset"
 	fipConnectivityCapability        = "yorc.capabilities.openstack.FIPConnectivity"
 	cloudReqConsulAttribute          = "cloud_requirements"
 	hpcReqConsulAttribute            = "heappe_job"
@@ -187,10 +183,6 @@ func (e *SetLocationsExecution) Execute(ctx context.Context) error {
 		// Nothing to do
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 			"Executing operation %s on node %q", e.Operation.Name, e.NodeName)
-	case "configure.pre_configure_source":
-		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-			"New target for %q", e.NodeName)
-		// return e.addTarget(ctx)
 	case tosca.RunnableSubmitOperationName:
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
 			"%s submitting request to compute best location by", e.NodeName)
@@ -258,47 +250,6 @@ func (e *SetLocationsExecution) resolveInputs(ctx context.Context) error {
 	var err error
 	e.EnvInputs, e.VarInputsNames, err = operations.ResolveInputsWithInstances(
 		ctx, e.DeploymentID, e.NodeName, e.TaskID, e.Operation, nil, nil)
-	return err
-}
-
-func (e *SetLocationsExecution) addTarget(ctx context.Context) error {
-
-	isCloudTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
-		e.Operation.ImplementedInType, cloudTargetRelationship)
-	if err != nil {
-		return err
-	}
-	if isCloudTarget {
-		isOptionalTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
-			e.Operation.ImplementedInType, optionalCloudTargetRelationship)
-		if err != nil {
-			return err
-		}
-		return e.addCloudTarget(ctx, isOptionalTarget)
-	}
-
-	isHPCTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
-		e.Operation.ImplementedInType, heappeTargetRelationship)
-	if err != nil {
-		return err
-	}
-	if isHPCTarget {
-		isOptionalTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
-			e.Operation.ImplementedInType, optionalHEAppETargetRelationship)
-		if err != nil {
-			return err
-		}
-		return e.addHPCTarget(ctx, isOptionalTarget)
-	}
-
-	isDatasetTarget, err := deployments.IsTypeDerivedFrom(ctx, e.DeploymentID,
-		e.Operation.ImplementedInType, datasetTargetRelationship)
-	if err != nil {
-		return err
-	}
-	if isDatasetTarget {
-		return e.addDatasetTarget(ctx)
-	}
 	return err
 }
 
@@ -482,46 +433,6 @@ func (e *SetLocationsExecution) getDatasetRequirement(ctx context.Context, targe
 	return datasetReq, err
 }
 
-// addCloudTarget is called when a new target is associated to this SetLocation component
-func (e *SetLocationsExecution) addCloudTarget(ctx context.Context, optional bool) error {
-
-	consulClient, err := e.Cfg.GetConsulClient()
-	if err != nil {
-		return err
-	}
-	lock, err := consulutil.AcquireLock(consulClient, ".lexis_lock_cloud_requirements", 0)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
-
-	cloudreq, err := getStoredCloudRequirements(ctx, e.DeploymentID, e.NodeName)
-	if err != nil {
-		return err
-	}
-
-	// Add a new requirement
-	newReq, err := e.getCloudRequirementFromEnvInputs()
-	if err != nil {
-		return err
-	}
-	newReq.Optional = optional
-	cloudreq[e.Operation.RelOp.TargetNodeName] = newReq
-
-	// Store new collected requirements value
-	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
-		cloudReqConsulAttribute, cloudreq)
-	if err != nil {
-		err = errors.Wrapf(err, "Failed to store cloud requirement details for deployment %s node %s",
-			e.DeploymentID, e.NodeName)
-		return err
-	}
-
-	return err
-}
-
 // getCloudRequirementFromEnvInputs gets the relationship operation input parameters
 func (e *SetLocationsExecution) getCloudRequirementFromEnvInputs() (CloudRequirement, error) {
 	var req CloudRequirement
@@ -582,45 +493,6 @@ func getStoredCloudRequirements(ctx context.Context,
 	return cloudreq, err
 }
 
-// addHPCTarget is called when a new target is associated to this SetLocation component
-func (e *SetLocationsExecution) addHPCTarget(ctx context.Context, optional bool) error {
-
-	consulClient, err := e.Cfg.GetConsulClient()
-	if err != nil {
-		return err
-	}
-	lock, err := consulutil.AcquireLock(consulClient, ".lexis_lock_cloud_requirements", 0)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
-
-	hpcreq, err := getStoredHPCRequirements(ctx, e.DeploymentID, e.NodeName)
-	if err != nil {
-		return err
-	}
-
-	// Add a new requirement
-	newReq, err := e.getHPCRequirementFromEnvInputs()
-	if err != nil {
-		return err
-	}
-	hpcreq[e.Operation.RelOp.TargetNodeName] = newReq
-
-	// Store new collected requirements value
-	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
-		hpcReqConsulAttribute, hpcreq)
-	if err != nil {
-		err = errors.Wrapf(err, "Failed to store HPC requirement details for deployment %s node %s",
-			e.DeploymentID, e.NodeName)
-		return err
-	}
-
-	return err
-}
-
 // getHPCRequirementFromEnvInputs gets the relationship operation input parameters
 func (e *SetLocationsExecution) getHPCRequirementFromEnvInputs() (HPCRequirement, error) {
 	var req HPCRequirement
@@ -672,45 +544,6 @@ func getStoredHPCRequirements(ctx context.Context,
 	}
 
 	return hpcreq, err
-}
-
-// addDatasetTarget is called when a new input dataset is associated to this SetLocation component
-func (e *SetLocationsExecution) addDatasetTarget(ctx context.Context) error {
-
-	consulClient, err := e.Cfg.GetConsulClient()
-	if err != nil {
-		return err
-	}
-	lock, err := consulutil.AcquireLock(consulClient, ".lexis_lock_cloud_requirements", 0)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
-
-	datasetReq, err := getStoredDatasetRequirements(ctx, e.DeploymentID, e.NodeName)
-	if err != nil {
-		return err
-	}
-
-	// Add a new requirement
-	newReq, err := e.getDatasetRequirementFromEnvInputs()
-	if err != nil {
-		return err
-	}
-	datasetReq[e.Operation.RelOp.TargetNodeName] = newReq
-
-	// Store new collected requirements value
-	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
-		datasetReqConsulAttribute, datasetReq)
-	if err != nil {
-		err = errors.Wrapf(err, "Failed to store dataset requirement details for deployment %s node %s",
-			e.DeploymentID, e.NodeName)
-		return err
-	}
-
-	return err
 }
 
 // getStoredDatasetRequirements retrieves dataset requirements already computed and

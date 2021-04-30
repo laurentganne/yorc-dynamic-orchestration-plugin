@@ -51,8 +51,8 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 
 	var exec Execution
 
-	// Get the required property, otken
-	token, err := deployments.GetStringNodePropertyValue(ctx, deploymentID, nodeName, "accessToken")
+	// Get the required property, token
+	token, err := deployments.GetStringNodePropertyValue(ctx, deploymentID, nodeName, "token")
 	if err != nil {
 		return exec, err
 	}

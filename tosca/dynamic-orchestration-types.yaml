@@ -5,9 +5,11 @@ metadata:
   template_version: 0.1.0
   template_author: lexis
 
+description: Dynamic orchestration types
+
 imports:
   - org.lexis.common.heappe-types:1.0.6
-  - org.lexis.common.ddi-types:0.1.3
+  - org.lexis.common.ddi-types:0.1.4
   - org.lexis.common.heappe-types:1.0.6
 
 data_types:
@@ -147,8 +149,8 @@ node_types:
     description: >
       Set locations of Intrastructures resources nodes to allocate
     properties:
-      accessToken:
-        description: Access token
+      token:
+        description: OpenID Connect token
         type: string
         required: true
     attributes:
@@ -200,7 +202,7 @@ node_types:
     interfaces:
       tosca.interfaces.node.lifecycle.Runnable:
         inputs:
-          TOKEN: { get_property: [SELF, accessToken] }
+          TOKEN: { get_property: [SELF, token] }
         submit:
           implementation:
             file: "embedded"

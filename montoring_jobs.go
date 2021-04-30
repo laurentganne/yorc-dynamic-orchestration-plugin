@@ -51,7 +51,7 @@ const (
 
 	actionDataNodeName  = "nodeName"
 	actionDataRequestID = "requestID"
-	actionDataToken     = "accessToken"
+	actionDataToken     = "token"
 	actionDataTaskID    = "taskID"
 )
 
@@ -255,7 +255,7 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 			} else if distrib == "windows" {
 				imageID = "94411a31-c407-4751-94c9-a4f4a963708d"
 			} else {
-				imageID = "768a2db5-1381-42be-894d-e4b496ca24b8"
+				imageID = "08e1da22-77fe-491c-b366-a1dae9f31458"
 			}
 
 			switch numCPUS {
@@ -274,7 +274,7 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 			} else if distrib == "windows" {
 				imageID = "2436a8b1-737c-429d-b4eb-e6b415bc9d02"
 			} else {
-				imageID = "9ac7db93-dbed-4a41-8e77-616024e48c2e"
+				imageID = "3785b748-ebaf-4763-8c83-bb7d1759cb9c"
 			}
 
 			switch numCPUS {
@@ -309,7 +309,11 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 	}
 
 	for nodeName, jobSpec := range hpcReqs {
-		datacenter = "it4i"
+		location := "it4i_heappe"
+
+		if strings.HasPrefix(jobSpec.Tasks[0].Name, "RunTraf") || strings.HasPrefix(jobSpec.Tasks[0].Name, "OpenFoam") {
+			location = "it4i_heappe_wp5"
+		}
 
 		taskLocation := TaskLocation{
 			NodeTypeID:        jobSpec.Tasks[0].ClusterNodeTypeID,
@@ -319,7 +323,7 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 			jobSpec.Tasks[0].Name: taskLocation,
 		}
 		hpcLocations[nodeName] = HPCLocation{
-			Name:          datacenter,
+			Name:          location,
 			Project:       jobSpec.Project,
 			TasksLocation: tasksLocations,
 		}
@@ -382,7 +386,6 @@ func (o *ActionOperator) assignHPCLocations(ctx context.Context, deploymentID st
 				return errors.Errorf("No available location found for compute instance %s in deployment %s", nodeName, deploymentID)
 			}
 		}
-		location.Name = location.Name + "_heappe"
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
 			"Location for %s: %s", nodeName, location.Name)
 
