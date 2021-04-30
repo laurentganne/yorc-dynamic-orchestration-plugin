@@ -56,7 +56,6 @@ type SetLocationsExecution struct {
 	DeploymentID           string
 	TaskID                 string
 	NodeName               string
-	Token                  string
 	Operation              prov.Operation
 	EnvInputs              []*operations.EnvInput
 	VarInputsNames         []string
@@ -157,7 +156,6 @@ func (e *SetLocationsExecution) ExecuteAsync(ctx context.Context) (*prov.Action,
 	data[actionDataTaskID] = e.TaskID
 	data[actionDataNodeName] = e.NodeName
 	data[actionDataRequestID] = requestID
-	data[actionDataToken] = e.Token
 
 	return &prov.Action{ActionType: computeBestLocationAction, Data: data}, e.MonitoringTimeInterval, err
 }

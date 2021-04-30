@@ -16,21 +16,32 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/laurentganne/yorcoidc"
 	"github.com/pkg/errors"
 
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/events"
 	"github.com/ystia/yorc/v4/locations"
 	"github.com/ystia/yorc/v4/prov"
 )
 
 const (
 	ddiInfrastructureType                 = "ddi"
+	heappeInfrastructureType              = "heappe"
 	locationDefaultMonitoringTimeInterval = 5 * time.Second
 	locationJobMonitoringTimeInterval     = "job_monitoring_time_interval"
 	setLocationsComponentType             = "org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob"
+	validateAndExchangeTokenComponentType = "org.lexis.common.dynamic.orchestration.nodes.ValidateAndExchangeToken"
+	accessTokenConsulAttribute            = "access_token"
+	refreshTokenConsulAttribute           = "refresh_token"
+	locationAAIURL                        = "aai_url"
+	locationAAIClientID                   = "aai_client_id"
+	locationAAIClientSecret               = "aai_client_secret"
+	locationAAIRealm                      = "aai_realm"
 )
 
 // Execution is the interface holding functions to execute an operation
@@ -51,23 +62,125 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 
 	var exec Execution
 
-	// Get the required property, token
-	token, err := deployments.GetStringNodePropertyValue(ctx, deploymentID, nodeName, "token")
+	isValidateToken, err := deployments.IsNodeDerivedFrom(ctx, deploymentID, nodeName, validateAndExchangeTokenComponentType)
 	if err != nil {
 		return exec, err
 	}
-	if token == "" {
-		return exec, errors.Errorf("No value provided for deployement %s node %s property token", deploymentID, nodeName)
-	}
 
+	if isValidateToken {
+		token, err := deployments.GetStringNodePropertyValue(ctx, deploymentID, nodeName, "token")
+		if err != nil {
+			return exec, err
+		}
+		if token == "" {
+			return exec, errors.Errorf("No value provided for deployement %s node %s property token", deploymentID, nodeName)
+		}
+		exec = &ValidateExchangeToken{
+			KV:           kv,
+			Cfg:          cfg,
+			DeploymentID: deploymentID,
+			TaskID:       taskID,
+			NodeName:     nodeName,
+			Operation:    operation,
+			Token:        token,
+		}
+		return exec, exec.ResolveExecution(ctx)
+
+	}
 	locationMgr, err := locations.GetManager(cfg)
 	if err != nil {
 		return nil, err
 	}
 	locationProps, err := locationMgr.GetLocationPropertiesForNode(ctx,
 		deploymentID, nodeName, ddiInfrastructureType)
+	if err == nil && len(locationProps) == 0 {
+		locationProps, err = locationMgr.GetLocationPropertiesForNode(ctx,
+			deploymentID, nodeName, heappeInfrastructureType)
+	}
+	if err != nil {
+		return exec, err
+	}
+
+	// Getting an AAI client to check token validity
+	aaiClient := getAAIClient(locationProps)
+
+	ids, err := deployments.GetNodeInstancesIds(ctx, deploymentID, nodeName)
+	if err != nil {
+		return exec, err
+	}
+
+	if len(ids) == 0 {
+		return exec, errors.Errorf("Found no instance for node %s in deployment %s", nodeName, deploymentID)
+	}
+
+	var accessToken, refreshToken string
+	val, err := deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, ids[0], accessTokenConsulAttribute)
 	if err != nil {
 		return nil, err
+	}
+	if val != nil {
+		accessToken = val.RawString()
+	}
+
+	if accessToken == "" {
+		token, err := deployments.GetStringNodePropertyValue(ctx, deploymentID,
+			nodeName, "token")
+		if err != nil {
+			return exec, err
+		}
+
+		if token == "" {
+			return exec, errors.Errorf("Found no token node %s in deployment %s", nodeName, deploymentID)
+		}
+
+		valid, err := aaiClient.IsAccessTokenValid(ctx, token)
+		if err != nil {
+			return exec, errors.Wrapf(err, "Failed to check validity of token")
+		}
+
+		if !valid {
+			errorMsg := fmt.Sprintf("Token provided in input for Job %s is not anymore valid", nodeName)
+			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelERROR, deploymentID).Registerf(errorMsg)
+			return exec, errors.Errorf(errorMsg)
+		}
+		// Exchange this token for an access and a refresh token for the orchestrator
+		accessToken, refreshToken, err = exchangeToken(ctx, aaiClient, token, deploymentID, nodeName)
+		if err != nil {
+			return exec, errors.Wrapf(err, "Failed to exchange token for orchestrator")
+		}
+
+	} else {
+		val, err = deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, ids[0], refreshTokenConsulAttribute)
+		if err != nil {
+			return exec, err
+		}
+		if val != nil {
+			refreshToken = val.RawString()
+		}
+	}
+
+	// Checking the access token validity
+	valid, err := aaiClient.IsAccessTokenValid(ctx, accessToken)
+	if err != nil {
+		return exec, errors.Wrapf(err, "Failed to check validity of access token")
+	}
+
+	if !valid {
+		accessToken, refreshToken, err = aaiClient.RefreshToken(ctx, refreshToken)
+		if err != nil {
+			return exec, errors.Wrapf(err, "Failed to refresh token for orchestrator")
+		}
+		// Store these values
+		err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
+			accessTokenConsulAttribute, accessToken)
+		if err != nil {
+			return exec, errors.Wrapf(err, "Job %s, failed to store access token", nodeName)
+		}
+		err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
+			refreshTokenConsulAttribute, refreshToken)
+		if err != nil {
+			return exec, errors.Wrapf(err, "Job %s, failed to store refresh token", nodeName)
+		}
 	}
 
 	monitoringTimeInterval := locationProps.GetDuration(locationJobMonitoringTimeInterval)
@@ -90,11 +203,43 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 			NodeName:               nodeName,
 			Operation:              operation,
 			MonitoringTimeInterval: monitoringTimeInterval,
-			Token:                  token,
 		}
 		return exec, exec.ResolveExecution(ctx)
 	}
 
 	return exec, errors.Errorf("operation %q supported only for nodes derived from %q",
 		operation, setLocationsComponentType)
+}
+
+// getAAIClient returns the AAI client for a given location
+func getAAIClient(locationProps config.DynamicMap) yorcoidc.Client {
+	url := locationProps.GetString(locationAAIURL)
+	clientID := locationProps.GetString(locationAAIClientID)
+	clientSecret := locationProps.GetString(locationAAIClientSecret)
+	realm := locationProps.GetString(locationAAIRealm)
+	return yorcoidc.GetClient(url, clientID, clientSecret, realm)
+}
+
+func exchangeToken(ctx context.Context, aaiClient yorcoidc.Client, token, deploymentID, nodeName string) (string, string, error) {
+	accessToken, refreshToken, err := aaiClient.ExchangeToken(ctx, token)
+	if err != nil {
+		return accessToken, refreshToken, errors.Wrapf(err, "Failed to exchange token for orchestrator")
+	}
+
+	// Store these values
+	err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
+		accessTokenConsulAttribute, accessToken)
+	if err != nil {
+		return accessToken, refreshToken, errors.Wrapf(err, "Job %s, failed to store access token", nodeName)
+	}
+	err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
+		refreshTokenConsulAttribute, refreshToken)
+	if err != nil {
+		err = errors.Wrapf(err, "Job %s, failed to store refresh token", nodeName)
+	}
+
+	events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
+		fmt.Sprintf("Token exchanged for an orchestrator client access/refresh token for node %s", nodeName))
+
+	return accessToken, refreshToken, err
 }

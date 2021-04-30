@@ -144,6 +144,23 @@ artifact_types:
   org.lexis.common.dynamic.orchestration.artifacts.Deployment:
     derived_from: tosca.artifacts.Deployment
 node_types:
+  org.lexis.common.dynamic.orchestration.nodes.ValidateAndExchangeToken:
+    derived_from: tosca.nodes.Root
+    description: >
+      Validate an input token and exchange it for the orchestrator client
+    properties:
+      token:
+        description: OpenID Connect token
+        type: string
+        required: true
+    interfaces:
+      Standard:
+        inputs:
+          TOKEN: { get_property: [SELF, token] }
+        start:
+          implementation:
+            file: "embedded"
+            type: org.lexis.common.dynamic.orchestration.artifacts.Deployment
   org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob:
     derived_from: tosca.nodes.Root
     description: >
@@ -183,6 +200,12 @@ node_types:
         type: string
         description: >
           ID of the request to compute the best locations
+      access_token:
+        type: string
+        description: OpenID Connect access token
+      refresh_token:
+        type: string
+        description: OpenID Connect refresh token
     requirements:
       - cloud_instance:
           capability: tosca.capabilities.OperatingSystem

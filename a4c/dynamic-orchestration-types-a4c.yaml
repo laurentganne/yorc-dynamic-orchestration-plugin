@@ -139,6 +139,23 @@ artifact_types:
   org.alien4cloud.artifacts.AnsiblePlaybook:
     derived_from: tosca.artifacts.Root
 node_types:
+  org.lexis.common.dynamic.orchestration.nodes.ValidateAndExchangeToken:
+    derived_from: tosca.nodes.Root
+    description: >
+      Validate an input token and exchange it for the orchestrator client
+    properties:
+      token:
+        description: OpenID Connect token
+        type: string
+        required: true
+    interfaces:
+      Standard:
+        inputs:
+          TOKEN: { get_property: [SELF, token] }
+        start:
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook
   org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob:
     derived_from: tosca.nodes.Root
     description: >
@@ -168,6 +185,12 @@ node_types:
         type: string
         description: >
           ID of the request to compute the best locations
+      access_token:
+        type: string
+        description: OpenID Connect access token
+      refresh_token:
+        type: string
+        description: OpenID Connect refresh token
     requirements:
       - cloud_instance:
           capability: tosca.capabilities.OperatingSystem

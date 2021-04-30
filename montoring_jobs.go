@@ -51,7 +51,6 @@ const (
 
 	actionDataNodeName  = "nodeName"
 	actionDataRequestID = "requestID"
-	actionDataToken     = "token"
 	actionDataTaskID    = "taskID"
 )
 
@@ -60,7 +59,6 @@ type ActionOperator struct {
 }
 
 type actionData struct {
-	token    string
 	taskID   string
 	nodeName string
 }
@@ -159,11 +157,6 @@ func (o *ActionOperator) getActionData(action *prov.Action) (*actionData, error)
 	actionData.nodeName, ok = action.Data[actionDataNodeName]
 	if !ok {
 		return actionData, errors.Errorf("Missing mandatory information nodeName for actionType:%q", action.ActionType)
-	}
-	// Check token
-	actionData.token, ok = action.Data[actionDataToken]
-	if !ok {
-		return actionData, errors.Errorf("Missing mandatory information token for actionType:%q", action.ActionType)
 	}
 	// Check taskID
 	actionData.taskID, ok = action.Data[actionDataTaskID]
