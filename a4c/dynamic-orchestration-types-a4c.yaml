@@ -139,23 +139,6 @@ artifact_types:
   org.alien4cloud.artifacts.AnsiblePlaybook:
     derived_from: tosca.artifacts.Root
 node_types:
-  org.lexis.common.dynamic.orchestration.nodes.ValidateAndExchangeToken:
-    derived_from: tosca.nodes.Root
-    description: >
-      Validate an input token and exchange it for the orchestrator client
-    properties:
-      token:
-        description: OpenID Connect token
-        type: string
-        required: true
-    interfaces:
-      Standard:
-        inputs:
-          TOKEN: { get_property: [SELF, token] }
-        start:
-          implementation:
-            file: dynamic-orchestration-types-a4c.yaml
-            type: org.alien4cloud.artifacts.AnsiblePlaybook
   org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob:
     derived_from: tosca.nodes.Root
     description: >
@@ -166,6 +149,9 @@ node_types:
         type: string
         required: true
     attributes:
+      nodes_locations:
+        type: string
+        description: json map providing for each node, its selected location
       cloud_requirements:
         type: map
         description: Requirements on cloud instances
@@ -216,6 +202,39 @@ node_types:
             file: dynamic-orchestration-types-a4c.yaml
             type: org.alien4cloud.artifacts.AnsiblePlaybook
         run:
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook
+  org.lexis.common.dynamic.orchestration.nodes.ValidateAndExchangeToken:
+    derived_from: tosca.nodes.Root
+    description: >
+      Validate an input token and exchange it for the orchestrator client
+    properties:
+      token:
+        description: OpenID Connect token
+        type: string
+        required: true
+    interfaces:
+      Standard:
+        inputs:
+          TOKEN: { get_property: [SELF, token] }
+        start:
+          implementation:
+            file: dynamic-orchestration-types-a4c.yaml
+            type: org.alien4cloud.artifacts.AnsiblePlaybook
+  org.lexis.common.dynamic.orchestration.nodes.RefreshTargetTokens:
+    derived_from: tosca.nodes.Root
+    description: >
+      Refreshes the access and refresh token attributes of the associated target
+    requirements:
+      - target:
+          capability: tosca.capabilities.Node
+          node: tosca.nodes.Root
+          relationship: tosca.relationships.DependsOn
+          occurrences: [ 1, 1 ]
+    interfaces:
+      Standard:
+        start:
           implementation:
             file: dynamic-orchestration-types-a4c.yaml
             type: org.alien4cloud.artifacts.AnsiblePlaybook

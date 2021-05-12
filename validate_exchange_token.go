@@ -133,6 +133,9 @@ func (v *ValidateExchangeToken) validateAndExchangeToken(ctx context.Context) er
 	}
 
 	for _, nodeName := range nodeNames {
+		if nodeName == v.NodeName {
+			continue
+		}
 		found, err := deployments.NodeHasAttribute(ctx, v.DeploymentID, nodeName, refreshTokenConsulAttribute, true)
 		if err != nil {
 			return errors.Wrapf(err, "Failed to check if node %s has attributes %s", nodeName, refreshTokenConsulAttribute)

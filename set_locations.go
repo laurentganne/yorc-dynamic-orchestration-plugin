@@ -40,6 +40,7 @@ const (
 	hpcReqConsulAttribute            = "heappe_job"
 	cloudLocationsConsulAttribute    = "cloud_locations"
 	hpcLocationsConsulAttribute      = "hpc_locations"
+	nodesLocationsConsulAttribute    = "nodes_locations"
 	datasetReqConsulAttribute        = "input_dataset"
 	osCapability                     = "tosca.capabilities.OperatingSystem"
 	heappeJobCapability              = "org.lexis.common.heappe.capabilities.HeappeJob"

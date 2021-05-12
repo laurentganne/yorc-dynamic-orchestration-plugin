@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"strconv"
@@ -301,10 +302,17 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 		return cloudLocations, hpcLocations, err
 	}
 
+	// Store locations in an attribute exposed in Alien4Cloud
+	nodesLocations := make(map[string]string)
+	for n, val := range cloudLocations {
+		nodesLocations[n] = val.Name + "_openstack"
+	}
+
 	for nodeName, jobSpec := range hpcReqs {
 		location := "it4i_heappe"
 
-		if strings.HasPrefix(jobSpec.Tasks[0].Name, "RunTraf") || strings.HasPrefix(jobSpec.Tasks[0].Name, "OpenFoam") {
+		if strings.HasPrefix(strings.ToLower(jobSpec.Tasks[0].Name), "runtraf") ||
+			strings.HasPrefix(strings.ToLower(jobSpec.Tasks[0].Name), "openfoam") {
 			location = "it4i_heappe_wp5"
 		}
 
@@ -330,6 +338,18 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 			deploymentID, nodeName)
 		return cloudLocations, hpcLocations, err
 	}
+
+	// Store locations in an attribute exposed in Alien4Cloud
+	for n, val := range hpcLocations {
+		nodesLocations[n] = val.Name
+	}
+	v, err := json.Marshal(nodesLocations)
+	if err != nil {
+		return cloudLocations, hpcLocations, err
+	}
+
+	err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
+		nodesLocationsConsulAttribute, string(v))
 
 	return cloudLocations, hpcLocations, err
 
