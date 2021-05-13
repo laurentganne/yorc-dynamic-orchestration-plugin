@@ -24,7 +24,6 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/ystia/yorc/v4/config"
-	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
 	"github.com/ystia/yorc/v4/locations"
 	"github.com/ystia/yorc/v4/prov"
@@ -112,7 +111,7 @@ func (v *ValidateExchangeToken) validateAndExchangeToken(ctx context.Context) er
 	}
 
 	// Getting an AAI client to check token validity
-	aaiClient := getAAIClient(locationProps)
+	aaiClient := getAAIClient(v.DeploymentID, locationProps)
 	valid, err := aaiClient.IsAccessTokenValid(ctx, v.Token)
 	if err != nil {
 		return errors.Wrapf(err, "Failed to check validity of token")
@@ -125,28 +124,7 @@ func (v *ValidateExchangeToken) validateAndExchangeToken(ctx context.Context) er
 	}
 
 	// Exchange this token to get one access/refresh token for the orchestrator client
-	// and provide one access/refresh token to each component needing it in this deployement
-	// so that can work (refresh their own token when needed) independently of the others
-	nodeNames, err := deployments.GetNodes(ctx, v.DeploymentID)
-	if err != nil {
-		return errors.Wrapf(err, "Failed to get nodes in deployment")
-	}
-
-	for _, nodeName := range nodeNames {
-		if nodeName == v.NodeName {
-			continue
-		}
-		found, err := deployments.NodeHasAttribute(ctx, v.DeploymentID, nodeName, refreshTokenConsulAttribute, true)
-		if err != nil {
-			return errors.Wrapf(err, "Failed to check if node %s has attributes %s", nodeName, refreshTokenConsulAttribute)
-		}
-		if found {
-			_, _, err = exchangeToken(ctx, aaiClient, v.Token, v.DeploymentID, nodeName)
-			if err != nil {
-				return err
-			}
-		}
-	}
+	_, _, err = aaiClient.ExchangeToken(ctx, v.Token)
 
 	return err
 }

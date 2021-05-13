@@ -26,7 +26,6 @@ import (
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
 	"github.com/ystia/yorc/v4/locations"
-	"github.com/ystia/yorc/v4/log"
 	"github.com/ystia/yorc/v4/prov"
 )
 
@@ -37,9 +36,6 @@ const (
 	locationJobMonitoringTimeInterval     = "job_monitoring_time_interval"
 	setLocationsComponentType             = "org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob"
 	validateAndExchangeTokenComponentType = "org.lexis.common.dynamic.orchestration.nodes.ValidateAndExchangeToken"
-	refreshTargetTokensComponentType      = "org.lexis.common.dynamic.orchestration.nodes.RefreshTargetTokens"
-	accessTokenConsulAttribute            = "access_token"
-	refreshTokenConsulAttribute           = "refresh_token"
 	locationAAIURL                        = "aai_url"
 	locationAAIClientID                   = "aai_client_id"
 	locationAAIClientSecret               = "aai_client_secret"
@@ -90,24 +86,6 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 
 	}
 
-	isRefreshTargetTokens, err := deployments.IsNodeDerivedFrom(ctx, deploymentID, nodeName, refreshTargetTokensComponentType)
-	if err != nil {
-		return exec, err
-	}
-
-	if isRefreshTargetTokens {
-		exec = &RefreshTargetTokens{
-			KV:           kv,
-			Cfg:          cfg,
-			DeploymentID: deploymentID,
-			TaskID:       taskID,
-			NodeName:     nodeName,
-			Operation:    operation,
-		}
-		return exec, exec.ResolveExecution(ctx)
-
-	}
-
 	locationMgr, err := locations.GetManager(cfg)
 	if err != nil {
 		return nil, err
@@ -123,24 +101,11 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 	}
 
 	// Getting an AAI client to check token validity
-	aaiClient := getAAIClient(locationProps)
+	aaiClient := getAAIClient(deploymentID, locationProps)
 
-	ids, err := deployments.GetNodeInstancesIds(ctx, deploymentID, nodeName)
-	if err != nil {
-		return exec, err
-	}
-
-	if len(ids) == 0 {
-		return exec, errors.Errorf("Found no instance for node %s in deployment %s", nodeName, deploymentID)
-	}
-
-	var accessToken, refreshToken string
-	val, err := deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, ids[0], accessTokenConsulAttribute)
+	accessToken, err := aaiClient.GetAccessToken()
 	if err != nil {
 		return nil, err
-	}
-	if val != nil {
-		accessToken = val.RawString()
 	}
 
 	if accessToken == "" {
@@ -165,19 +130,11 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 			return exec, errors.Errorf(errorMsg)
 		}
 		// Exchange this token for an access and a refresh token for the orchestrator
-		accessToken, refreshToken, err = exchangeToken(ctx, aaiClient, token, deploymentID, nodeName)
+		accessToken, _, err = aaiClient.ExchangeToken(ctx, token)
 		if err != nil {
 			return exec, errors.Wrapf(err, "Failed to exchange token for orchestrator")
 		}
 
-	} else {
-		val, err = deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, ids[0], refreshTokenConsulAttribute)
-		if err != nil {
-			return exec, err
-		}
-		if val != nil {
-			refreshToken = val.RawString()
-		}
 	}
 
 	// Checking the access token validity
@@ -187,20 +144,9 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 	}
 
 	if !valid {
-		_, _, err = refreshAccessToken(ctx, aaiClient, deploymentID, nodeName, refreshToken)
+		_, _, err = aaiClient.RefreshToken(ctx)
 		if err != nil {
 			return exec, errors.Wrapf(err, "Failed to refresh token for orchestrator")
-		}
-		// Store these values
-		err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
-			accessTokenConsulAttribute, accessToken)
-		if err != nil {
-			return exec, errors.Wrapf(err, "Job %s, failed to store access token", nodeName)
-		}
-		err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
-			refreshTokenConsulAttribute, refreshToken)
-		if err != nil {
-			return exec, errors.Wrapf(err, "Job %s, failed to store refresh token", nodeName)
 		}
 	}
 
@@ -233,66 +179,10 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 }
 
 // getAAIClient returns the AAI client for a given location
-func getAAIClient(locationProps config.DynamicMap) yorcoidc.Client {
+func getAAIClient(deploymentID string, locationProps config.DynamicMap) yorcoidc.Client {
 	url := locationProps.GetString(locationAAIURL)
 	clientID := locationProps.GetString(locationAAIClientID)
 	clientSecret := locationProps.GetString(locationAAIClientSecret)
 	realm := locationProps.GetString(locationAAIRealm)
-	return yorcoidc.GetClient(url, clientID, clientSecret, realm)
-}
-
-func exchangeToken(ctx context.Context, aaiClient yorcoidc.Client, token, deploymentID, nodeName string) (string, string, error) {
-	accessToken, refreshToken, err := aaiClient.ExchangeToken(ctx, token)
-	if err != nil {
-		return accessToken, refreshToken, errors.Wrapf(err, "Failed to exchange token for orchestrator")
-	}
-
-	// Store these values
-	err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
-		accessTokenConsulAttribute, accessToken)
-	if err != nil {
-		return accessToken, refreshToken, errors.Wrapf(err, "Job %s, failed to store access token", nodeName)
-	}
-	err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
-		refreshTokenConsulAttribute, refreshToken)
-	if err != nil {
-		err = errors.Wrapf(err, "Job %s, failed to store refresh token", nodeName)
-	}
-
-	events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
-		fmt.Sprintf("Token exchanged for an orchestrator client access/refresh token for node %s", nodeName))
-
-	return accessToken, refreshToken, err
-}
-
-func refreshAccessToken(ctx context.Context, aaiClient yorcoidc.Client, deploymentID, nodeName, refreshToken string) (string, string, error) {
-	if refreshToken == "" {
-		val, err := deployments.GetInstanceAttributeValue(ctx, deploymentID, nodeName, "0", refreshTokenConsulAttribute)
-		if err != nil {
-			return "", "", err
-		}
-		if val != nil {
-			refreshToken = val.RawString()
-		}
-	}
-
-	accessToken, newRefreshToken, err := aaiClient.RefreshToken(ctx, refreshToken)
-	if err != nil {
-		log.Printf("ERROR %s attempting to refresh token %s\n", err.Error(), refreshToken)
-		return accessToken, newRefreshToken, errors.Wrapf(err, "Failed to refresh token for orchestrator")
-	}
-	// Store these values
-	err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
-		accessTokenConsulAttribute, accessToken)
-	if err != nil {
-		return accessToken, newRefreshToken, errors.Wrapf(err, "Job %s, failed to store access token", nodeName)
-	}
-	err = deployments.SetAttributeForAllInstances(ctx, deploymentID, nodeName,
-		refreshTokenConsulAttribute, newRefreshToken)
-	if err != nil {
-		return accessToken, newRefreshToken, errors.Wrapf(err, "Node %s, failed to store refresh token", nodeName)
-	}
-
-	return accessToken, newRefreshToken, err
-
+	return yorcoidc.GetClient(deploymentID, url, clientID, clientSecret, realm)
 }

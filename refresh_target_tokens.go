@@ -24,13 +24,10 @@ import (
 
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
-	"github.com/ystia/yorc/v4/events"
 	"github.com/ystia/yorc/v4/locations"
 	"github.com/ystia/yorc/v4/prov"
 	"github.com/ystia/yorc/v4/tosca"
 )
-
-const targetRequirement = "target"
 
 // RefreshTargetTokens holds propertied of a component refreshing tokens of a target
 type RefreshTargetTokens struct {
@@ -53,16 +50,7 @@ func (r *RefreshTargetTokens) Execute(ctx context.Context) error {
 	var err error
 	switch strings.ToLower(r.Operation.Name) {
 	case "standard.start":
-		var locationProps config.DynamicMap
-		var targetNodeName string
-		locationProps, targetNodeName, err = r.getLocationTargetFromRequirement(ctx, targetRequirement)
-		if err != nil {
-			err = errors.Wrapf(err, "Failed to get target associated to %s", r.NodeName)
-		} else {
-			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, r.DeploymentID).Registerf(
-				"Refreshing tokens for target of %s: %s", r.NodeName, targetNodeName)
-			_, _, err = refreshAccessToken(ctx, getAAIClient(locationProps), r.DeploymentID, targetNodeName, "")
-		}
+		// Nothing to do
 	case "install", "uninstall", "standard.create", "standard.stop", "standard.delete":
 		// Nothing to do here
 	case tosca.RunnableSubmitOperationName, tosca.RunnableCancelOperationName:

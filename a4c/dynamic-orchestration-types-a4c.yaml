@@ -171,12 +171,6 @@ node_types:
         type: string
         description: >
           ID of the request to compute the best locations
-      access_token:
-        type: string
-        description: OpenID Connect access token
-      refresh_token:
-        type: string
-        description: OpenID Connect refresh token
     requirements:
       - cloud_instance:
           capability: tosca.capabilities.OperatingSystem
