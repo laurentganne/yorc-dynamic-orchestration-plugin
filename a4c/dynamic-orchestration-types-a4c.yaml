@@ -142,7 +142,7 @@ node_types:
   org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob:
     derived_from: tosca.nodes.Root
     description: >
-      Set locations of Infrastructures resources nodes to allocate
+      Compute the best locations where to allocate the associated infrastructure resources components
     properties:
       token:
         description: OpenID Connect token
@@ -219,7 +219,7 @@ node_types:
   org.lexis.common.dynamic.orchestration.nodes.RefreshTargetTokens:
     derived_from: tosca.nodes.Root
     description: >
-      Refreshes the access and refresh token attributes of the associated target
+      Refreshes the access token attribute of the associated target
     requirements:
       - target:
           capability: tosca.capabilities.Node
