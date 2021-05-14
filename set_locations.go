@@ -423,9 +423,13 @@ func (e *SetLocationsExecution) getDatasetRequirement(ctx context.Context, targe
 		return datasetReq, err
 	}
 	if val != nil {
-		err = json.Unmarshal([]byte(val.RawString()), &datasetReq.Locations)
-		if err != nil {
-			err = errors.Wrapf(err, "Failed to unmarshal locations from string %s", val.RawString())
+		if val.RawString() == "" {
+			datasetReq.Locations = make([]string, 0)
+		} else {
+			err = json.Unmarshal([]byte(val.RawString()), &datasetReq.Locations)
+			if err != nil {
+				err = errors.Wrapf(err, "Failed to unmarshal locations from string %s", val.RawString())
+			}
 		}
 	}
 
