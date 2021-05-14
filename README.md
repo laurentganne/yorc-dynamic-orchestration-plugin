@@ -1,6 +1,6 @@
 # Yorc Dynamic Orchestration plugin
 
-The Yorc Dynmaic Orchestration plugin implements a Yorc ([Ystia orchestrator](https://github.com/ystia/yorc/)) plugin as described in [Yorc documentation](https://yorc.readthedocs.io/en/latest/plugins.html), allowing the orchestrator
+The Yorc Dynamic Orchestration plugin implements a Yorc ([Ystia orchestrator](https://github.com/ystia/yorc/)) plugin as described in [Yorc documentation](https://yorc.readthedocs.io/en/latest/plugins.html), allowing the orchestrator
 to dynamically change the location of infrastructure resources to create in a workflow.
 
 ## TOSCA components
