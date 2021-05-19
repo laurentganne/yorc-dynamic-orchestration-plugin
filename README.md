@@ -30,7 +30,7 @@ cd yorc-dynamic-orchestration-plugin
 make
 ```
 
-The plugin is then available at `bin/dyn-orchestration-plugin`.
+The plugin is then available at `bin/lexis-dynamic-orchestration-plugin`.
 
 ## Licensing
 
