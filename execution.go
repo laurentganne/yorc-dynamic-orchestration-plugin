@@ -26,6 +26,7 @@ import (
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
 	"github.com/ystia/yorc/v4/locations"
+	"github.com/ystia/yorc/v4/log"
 	"github.com/ystia/yorc/v4/prov"
 )
 
@@ -36,6 +37,7 @@ const (
 	locationJobMonitoringTimeInterval     = "job_monitoring_time_interval"
 	setLocationsComponentType             = "org.lexis.common.dynamic.orchestration.nodes.SetLocationsJob"
 	validateAndExchangeTokenComponentType = "org.lexis.common.dynamic.orchestration.nodes.ValidateAndExchangeToken"
+	refreshTargetTokensComponentType      = "org.lexis.common.dynamic.orchestration.nodes.RefreshTargetTokens"
 	locationAAIURL                        = "aai_url"
 	locationAAIClientID                   = "aai_client_id"
 	locationAAIClientSecret               = "aai_client_secret"
@@ -60,6 +62,22 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 
 	var exec Execution
 
+	locationMgr, err := locations.GetManager(cfg)
+	if err != nil {
+		return nil, err
+	}
+	locationProps, err := locationMgr.GetLocationPropertiesForNode(ctx,
+		deploymentID, nodeName, bluInfrastructureType)
+	if err != nil {
+		return exec, err
+	}
+	if len(locationProps) == 0 {
+		return exec, errors.Errorf("Found no location of type %s", bluInfrastructureType)
+	}
+
+	// Getting an AAI client to check token validity
+	aaiClient := getAAIClient(deploymentID, locationProps)
+
 	isValidateToken, err := deployments.IsNodeDerivedFrom(ctx, deploymentID, nodeName, validateAndExchangeTokenComponentType)
 	if err != nil {
 		return exec, err
@@ -76,6 +94,7 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 		exec = &ValidateExchangeToken{
 			KV:           kv,
 			Cfg:          cfg,
+			AAIClient:    aaiClient,
 			DeploymentID: deploymentID,
 			TaskID:       taskID,
 			NodeName:     nodeName,
@@ -85,23 +104,6 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 		return exec, exec.ResolveExecution(ctx)
 
 	}
-
-	locationMgr, err := locations.GetManager(cfg)
-	if err != nil {
-		return nil, err
-	}
-	locationProps, err := locationMgr.GetLocationPropertiesForNode(ctx,
-		deploymentID, nodeName, ddiInfrastructureType)
-	if err == nil && len(locationProps) == 0 {
-		locationProps, err = locationMgr.GetLocationPropertiesForNode(ctx,
-			deploymentID, nodeName, heappeInfrastructureType)
-	}
-	if err != nil {
-		return exec, err
-	}
-
-	// Getting an AAI client to check token validity
-	aaiClient := getAAIClient(deploymentID, locationProps)
 
 	accessToken, err := aaiClient.GetAccessToken()
 	if err != nil {
@@ -162,14 +164,43 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 	}
 
 	if isSetLocationsComponent {
+		projectID, err := deployments.GetStringNodePropertyValue(ctx, deploymentID,
+			nodeName, "project_id")
+		if err != nil {
+			return exec, err
+		}
+
+		if projectID == "" {
+			return exec, errors.Errorf("Found no project_id node %s in deployment %s", nodeName, deploymentID)
+		}
 		exec = &SetLocationsExecution{
 			KV:                     kv,
 			Cfg:                    cfg,
+			AAIClient:              aaiClient,
+			LocationProps:          locationProps,
+			ProjectID:              projectID,
 			DeploymentID:           deploymentID,
 			TaskID:                 taskID,
 			NodeName:               nodeName,
 			Operation:              operation,
 			MonitoringTimeInterval: monitoringTimeInterval,
+		}
+		return exec, exec.ResolveExecution(ctx)
+	}
+
+	isRefreshTargetTokensComponent, err := deployments.IsNodeDerivedFrom(ctx, deploymentID, nodeName, refreshTargetTokensComponentType)
+	if err != nil {
+		return exec, err
+	}
+
+	if isRefreshTargetTokensComponent {
+		exec = &RefreshTargetTokens{
+			KV:           kv,
+			Cfg:          cfg,
+			DeploymentID: deploymentID,
+			TaskID:       taskID,
+			NodeName:     nodeName,
+			Operation:    operation,
 		}
 		return exec, exec.ResolveExecution(ctx)
 	}
@@ -185,4 +216,19 @@ func getAAIClient(deploymentID string, locationProps config.DynamicMap) yorcoidc
 	clientSecret := locationProps.GetString(locationAAIClientSecret)
 	realm := locationProps.GetString(locationAAIRealm)
 	return yorcoidc.GetClient(deploymentID, url, clientID, clientSecret, realm)
+}
+
+// refreshToken refreshes an access token
+func refreshToken(ctx context.Context, locationProps config.DynamicMap, deploymentID string) (string, string, error) {
+
+	aaiClient := getAAIClient(deploymentID, locationProps)
+	// Getting an AAI client to check token validity
+	accessToken, newRefreshToken, err := aaiClient.RefreshToken(ctx)
+	if err != nil {
+		refreshToken, _ := aaiClient.GetRefreshToken()
+		log.Printf("ERROR %s attempting to refresh token %s\n", err.Error(), refreshToken)
+		return accessToken, newRefreshToken, errors.Wrapf(err, "Failed to refresh token for orchestrator")
+	}
+
+	return accessToken, newRefreshToken, err
 }

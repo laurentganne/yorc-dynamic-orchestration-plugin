@@ -153,6 +153,10 @@ node_types:
         description: OpenID Connect token
         type: string
         required: true
+      project_id:
+        description: LEXIS project identifier
+        type: string
+        required: true
     attributes:
       nodes_locations:
         type: string

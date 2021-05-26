@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/laurentganne/yorcoidc"
 	"github.com/pkg/errors"
 
 	"github.com/ystia/yorc/v4/config"
@@ -36,6 +37,7 @@ import (
 type ValidateExchangeToken struct {
 	KV             *api.KV
 	Cfg            config.Configuration
+	AAIClient      yorcoidc.Client
 	DeploymentID   string
 	TaskID         string
 	NodeName       string

@@ -19,14 +19,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
-	"strconv"
 	"strings"
 
+	"github.com/laurentganne/yorc-dynamic-orchestration-plugin/blu"
 	"github.com/pkg/errors"
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
 	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/locations"
 	"github.com/ystia/yorc/v4/log"
 	"github.com/ystia/yorc/v4/prov"
 	"github.com/ystia/yorc/v4/storage"
@@ -91,11 +92,45 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		return true, errors.Errorf("Missing mandatory information requestID for actionType:%q", action.ActionType)
 	}
 
-	var status string
+	var cloudPlacement blu.CloudPlacement
+	var hpcPlacement blu.HPCPlacement
 	switch action.ActionType {
 	case computeBestLocationAction:
-		// TODO: call the business logic API to get the request status
-		status = TaskStatusDoneMsg
+		locationMgr, err := locations.GetManager(cfg)
+		if err != nil {
+			return true, err
+		}
+		locationProps, err := locationMgr.GetLocationPropertiesForNode(ctx,
+			deploymentID, actionData.nodeName, bluInfrastructureType)
+		if err != nil {
+			return true, err
+		}
+		if len(locationProps) == 0 {
+			return true, errors.Errorf("Found no location of type %s", bluInfrastructureType)
+		}
+
+		var refreshTokenFunc blu.RefreshTokenFunc = func() (string, error) {
+			accessToken, _, err := refreshToken(ctx, locationProps, deploymentID)
+			return accessToken, err
+		}
+		client, err := blu.GetClient(locationProps, refreshTokenFunc)
+		if err != nil {
+			return true, err
+		}
+		aaiClient := getAAIClient(deploymentID, locationProps)
+		accessToken, err := aaiClient.GetAccessToken()
+		if err != nil {
+			return true, err
+		}
+		cloudPlacement, err = client.GetCloudPlacementRequestStatus(accessToken, requestID)
+		if err != nil {
+			return true, err
+		}
+
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
+			"Component %s received from BLU cloud placement results %+v",
+			actionData.nodeName, cloudPlacement)
+
 	default:
 		err = errors.Errorf("Unsupported action %s", action.ActionType)
 	}
@@ -103,14 +138,11 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		return true, err
 	}
 
+	status := cloudPlacement.Status
 	var requestStatus string
 	var errorMessage string
 	switch {
-	case status == TaskStatusPendingMsg:
-		requestStatus = requestStatusPending
-	case status == TaskStatusInProgressMsg:
-		requestStatus = requestStatusRunning
-	case status == TaskStatusDoneMsg:
+	case status == blu.RequestStatusOK:
 		requestStatus = requestStatusCompleted
 	default:
 		return true, errors.Errorf("Unexpected status :%q", status)
@@ -127,7 +159,7 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		// job has been done successfully : unregister monitoring
 		deregister = true
 		// Update locations
-		err = o.setLocations(ctx, deploymentID, actionData.nodeName)
+		err = o.setLocations(ctx, deploymentID, actionData.nodeName, cloudPlacement, hpcPlacement)
 	case requestStatusPending, requestStatusRunning:
 		// job's still running or its state is about to be set definitively: monitoring is keeping on (deregister stays false)
 	default:
@@ -167,7 +199,8 @@ func (o *ActionOperator) getActionData(action *prov.Action) (*actionData, error)
 	return actionData, nil
 }
 
-func (o *ActionOperator) setLocations(ctx context.Context, deploymentID, nodeName string) error {
+func (o *ActionOperator) setLocations(ctx context.Context, deploymentID, nodeName string,
+	cloudPlacement blu.CloudPlacement, hpcPlacement blu.HPCPlacement) error {
 
 	var err error
 
@@ -186,7 +219,8 @@ func (o *ActionOperator) setLocations(ctx context.Context, deploymentID, nodeNam
 	}
 
 	// Compute locations fulfilling these requirements
-	cloudLocations, hpcLocations, err := o.computeLocations(ctx, deploymentID, nodeName, cloudReqs, hpcReqs, datasetReqs)
+	cloudLocations, hpcLocations, err := o.computeLocations(ctx, deploymentID, nodeName, cloudReqs, hpcReqs, datasetReqs,
+		cloudPlacement, hpcPlacement)
 	if err != nil {
 		return err
 	}
@@ -203,92 +237,37 @@ func (o *ActionOperator) setLocations(ctx context.Context, deploymentID, nodeNam
 }
 
 func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nodeName string, cloudReqs map[string]CloudRequirement,
-	hpcReqs map[string]HPCRequirement, datasetReqs map[string]DatasetRequirement) (map[string]CloudLocation, map[string]HPCLocation, error) {
+	hpcReqs map[string]HPCRequirement, datasetReqs map[string]DatasetRequirement,
+	cloudPlacement blu.CloudPlacement, hpcPlacement blu.HPCPlacement) (map[string]CloudLocation, map[string]HPCLocation, error) {
 
 	cloudLocations := make(map[string]CloudLocation)
 	hpcLocations := make(map[string]HPCLocation)
 	var err error
-
-	// TODO: call dynamic allocation business logic
-	// instead of using this test code
-	datacenter := "lrz"
-	for datasetName, datasetReq := range datasetReqs {
-		locs := datasetReq.Locations
-		if len(locs) > 0 {
-			// Convention: the first section of location identify the datacenter
-			datacenter = strings.ToLower(strings.SplitN(locs[0], "_", 2)[0])
-			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
-				"Using datacenter %s for input dataset %s", datacenter, datasetName)
-			break
-		}
+	var cloudLocationName string
+	var cloudLocation blu.CloudLocation
+	if len(cloudPlacement.Message) > 0 {
+		cloudLocation = cloudPlacement.Message[0]
+		cloudLocationName = cloudPlacement.Message[0].Location + "_openstack"
+	} else {
+		cloudLocationName = "it4i_openstack"
+		log.Printf("Using default location %s", cloudLocationName)
 	}
 
 	for nodeName, req := range cloudReqs {
 		// Get user according to the version
-		user := "centos"
-		var imageID string
+		user := "ubuntu"
 		distrib := strings.ToLower(req.OSDistribution)
-		numCPUS := 2
-		var floatingIPPool string
-		var flavorName string
-		if req.NumCPUs != "" {
-			numCPUS, err = strconv.Atoi(req.NumCPUs)
-			if err != nil {
-				events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
-					"[ERROR] Wrong number of CPUs for %s : %s, assuming it needs 2 CPUs", nodeName, req.NumCPUs)
-			}
-		}
-		if distrib == "ubuntu" {
-			user = "ubuntu"
+		if distrib == "centos" {
+			user = "centos"
 		} else if distrib == "windows" {
 			user = "Admin"
 		}
-		if datacenter == "it4i" {
-			if distrib == "ubuntu" {
-				imageID = "a619d8b0-e083-48b8-9c7e-e647324d1961"
-			} else if distrib == "windows" {
-				imageID = "94411a31-c407-4751-94c9-a4f4a963708d"
-			} else {
-				imageID = "08e1da22-77fe-491c-b366-a1dae9f31458"
-			}
-
-			switch numCPUS {
-			case 0, 1, 2:
-				flavorName = "normal"
-			case 3, 4:
-				flavorName = "large"
-			default:
-				flavorName = "xlarge-mem128"
-			}
-
-			floatingIPPool = "vlan104_lexis"
-		} else {
-			if distrib == "ubuntu" {
-				imageID = "0d006427-aef5-4ed8-99c6-e381724a60e0"
-			} else if distrib == "windows" {
-				imageID = "2436a8b1-737c-429d-b4eb-e6b415bc9d02"
-			} else {
-				imageID = "3785b748-ebaf-4763-8c83-bb7d1759cb9c"
-			}
-
-			switch numCPUS {
-			case 0, 1, 2:
-				flavorName = "lrz.medium"
-			case 3, 4:
-				flavorName = "lrz.large"
-			default:
-				flavorName = "lrz.xlarge"
-			}
-
-			floatingIPPool = "internet_pool"
-
-		}
 
 		cloudLocations[nodeName] = CloudLocation{
-			Name:           datacenter,
-			Flavor:         flavorName,
-			ImageID:        imageID,
-			FloatingIPPool: floatingIPPool,
+			Name:           cloudLocationName,
+			Flavor:         cloudLocation.Flavor,
+			ImageID:        cloudLocation.ImageID,
+			FloatingIPPool: cloudLocation.FloatingIPPool,
 			User:           user,
 		}
 	}
@@ -305,7 +284,7 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 	// Store locations in an attribute exposed in Alien4Cloud
 	nodesLocations := make(map[string]string)
 	for n, val := range cloudLocations {
-		nodesLocations[n] = val.Name + "_openstack"
+		nodesLocations[n] = val.Name
 	}
 
 	for nodeName, jobSpec := range hpcReqs {
@@ -373,7 +352,6 @@ func (o *ActionOperator) assignCloudLocations(ctx context.Context, deploymentID 
 				return errors.Errorf("No available location found for compute instance %s in deployment %s", nodeName, deploymentID)
 			}
 		}
-		location.Name = location.Name + "_openstack"
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
 			"Location for %s: %s", nodeName, location.Name)
 		err = o.setCloudLocation(ctx, deploymentID, nodeName, req, location)

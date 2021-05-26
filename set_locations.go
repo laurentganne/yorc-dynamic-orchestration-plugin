@@ -17,16 +17,22 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/consul/api"
+	"github.com/laurentganne/yorc-dynamic-orchestration-plugin/blu"
+	"github.com/laurentganne/yorcoidc"
 
 	"github.com/pkg/errors"
 
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/log"
 	"github.com/ystia/yorc/v4/prov"
 	"github.com/ystia/yorc/v4/prov/operations"
 	"github.com/ystia/yorc/v4/tosca"
@@ -48,12 +54,16 @@ const (
 	hostCapabilityName               = "host"
 	osCapabilityName                 = "os"
 	datasetInfoCapabilityName        = "dataset_info"
+	bluInfrastructureType            = "blu"
 )
 
 // SetLocationsExecution holds Locations computation properties
 type SetLocationsExecution struct {
 	KV                     *api.KV
 	Cfg                    config.Configuration
+	AAIClient              yorcoidc.Client
+	LocationProps          config.DynamicMap
+	ProjectID              string
 	DeploymentID           string
 	TaskID                 string
 	NodeName               string
@@ -212,13 +222,87 @@ func (e *SetLocationsExecution) Execute(ctx context.Context) error {
 func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Context) error {
 
 	// Find associated targets for which to update the locations
-	err := e.findAssociatedTargets(ctx)
+	cloudReqs, hpcReqs, datasetReqs, err := e.findAssociatedTargets(ctx)
 	if err != nil {
 		return err
 	}
 
-	// TODO: call the Business logic
-	requestID := "test_request_id"
+	var bluStorageInputs []blu.StorageInput
+	for nodeName, datasetReq := range datasetReqs {
+		var storageInput blu.StorageInput
+		storageInput.Locations = datasetReq.Locations
+		storageInput.Size, err = getMaxSize(0, datasetReq.Size, "B")
+		if err != nil {
+			return errors.Wrapf(err, "Unexpected dataset size %s in dataset requirement %s",
+				datasetReq.Size, nodeName)
+		}
+		if datasetReq.NumberOfFiles != "" {
+			storageInput.NumberOfFiles, err = strconv.Atoi(datasetReq.NumberOfFiles)
+			if err != nil {
+				return errors.Wrapf(err, "Unexpected number of files %s in dataset requirement %s",
+					datasetReq.NumberOfFiles, nodeName)
+			}
+		}
+		bluStorageInputs = append(bluStorageInputs, storageInput)
+	}
+	var bluCloudReq blu.CloudRequirement
+	bluCloudReq.NumberOfLocations = 1
+	for nodeName, cloudReq := range cloudReqs {
+		bluCloudReq.NumberOfInstances = bluCloudReq.NumberOfInstances + 1
+		bluCloudReq.Project = e.ProjectID
+		bluCloudReq.OSVersion = getOSVersion(cloudReq)
+		bluCloudReq.MaxWallTime = 1000
+		bluCloudReq.CPUs, err = getMaxCPU(bluCloudReq.CPUs, cloudReq.NumCPUs)
+		if err != nil {
+			return errors.Wrapf(err, "Unexpected number of CPUs %s in compute instance requirement %s",
+				cloudReq.NumCPUs, nodeName)
+		}
+		bluCloudReq.Memory, err = getMaxSize(bluCloudReq.CPUs, cloudReq.MemSize, "MB")
+		if err != nil {
+			return errors.Wrapf(err, "Unexpected memory size %s in compute instance requirement %s",
+				cloudReq.MemSize, nodeName)
+		}
+		bluCloudReq.Disk, err = getMaxSize(bluCloudReq.CPUs, cloudReq.DiskSize, "GB")
+		if err != nil {
+			return errors.Wrapf(err, "Unexpected disk size %s in compute instance requirement %s",
+				cloudReq.DiskSize, nodeName)
+		}
+		bluCloudReq.StorageInputs = bluStorageInputs
+	}
+
+	// TODO: manage HPC placements
+	if len(hpcReqs) > 0 {
+		log.Printf("TODO: manage HPC requirements %v", hpcReqs)
+	}
+
+	var refreshTokenFunc blu.RefreshTokenFunc = func() (string, error) {
+		accessToken, _, err := refreshToken(ctx, e.LocationProps, e.DeploymentID)
+		return accessToken, err
+	}
+
+	token, err := e.AAIClient.GetAccessToken()
+	if err != nil {
+		return err
+	}
+	client, err := blu.GetClient(e.LocationProps, refreshTokenFunc)
+	if err != nil {
+		return err
+	}
+
+	reqVal, _ := json.Marshal(bluCloudReq)
+	events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+		"Component %s submitting to BLU cloud placement request %+s",
+		e.NodeName, string(reqVal))
+
+	submittedReq, err := client.SubmitCloudPlacementRequest(token, bluCloudReq)
+	if err != nil {
+		return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
+	}
+
+	if submittedReq.Status != blu.RequestStatusOK {
+		return errors.Errorf("Got response %v for Cloud placement request %+s", submittedReq, string(reqVal))
+	}
+	requestID := submittedReq.RequestID
 	// Store the request id
 	err = deployments.SetAttributeForAllInstances(ctx, e.DeploymentID, e.NodeName,
 		requestIDConsulAttribute, requestID)
@@ -254,37 +338,38 @@ func (e *SetLocationsExecution) resolveInputs(ctx context.Context) error {
 
 // findAssociatedTarget finds which compute instances, datasets and HPC jobs are
 // associated to this component
-func (e *SetLocationsExecution) findAssociatedTargets(ctx context.Context) error {
-	nodeTemplate, err := getStoredNodeTemplate(ctx, e.DeploymentID, e.NodeName)
-	if err != nil {
-		return err
-	}
-
-	// Get the associated targets
+func (e *SetLocationsExecution) findAssociatedTargets(ctx context.Context) (map[string]CloudRequirement, map[string]HPCRequirement, map[string]DatasetRequirement, error) {
 	cloudReqs := make(map[string]CloudRequirement)
 	hpcReqs := make(map[string]HPCRequirement)
 	datasetReqs := make(map[string]DatasetRequirement)
+
+	nodeTemplate, err := getStoredNodeTemplate(ctx, e.DeploymentID, e.NodeName)
+	if err != nil {
+		return cloudReqs, hpcReqs, datasetReqs, err
+	}
+
+	// Get the associated targets
 	for _, nodeReq := range nodeTemplate.Requirements {
 		for _, reqAssignment := range nodeReq {
 			switch reqAssignment.Capability {
 			case osCapability:
 				req, err := e.getCloudRequirement(ctx, reqAssignment.Node)
 				if err != nil {
-					return err
+					return cloudReqs, hpcReqs, datasetReqs, err
 				}
 				req.Optional = (reqAssignment.Relationship == optionalCloudTargetRelationship)
 				cloudReqs[reqAssignment.Node] = req
 			case heappeJobCapability:
 				req, err := e.getHPCRequirement(ctx, reqAssignment.Node)
 				if err != nil {
-					return err
+					return cloudReqs, hpcReqs, datasetReqs, err
 				}
 				req.Optional = (reqAssignment.Relationship == optionalHEAppETargetRelationship)
 				hpcReqs[reqAssignment.Node] = req
 			case datasetInfoCapability:
 				req, err := e.getDatasetRequirement(ctx, reqAssignment.Node)
 				if err != nil {
-					return err
+					return cloudReqs, hpcReqs, datasetReqs, err
 				}
 				datasetReqs[reqAssignment.Node] = req
 
@@ -300,24 +385,24 @@ func (e *SetLocationsExecution) findAssociatedTargets(ctx context.Context) error
 	if err != nil {
 		err = errors.Wrapf(err, "Failed to store cloud requirement details for deployment %s node %s",
 			e.DeploymentID, e.NodeName)
-		return err
+		return cloudReqs, hpcReqs, datasetReqs, err
 	}
 	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
 		hpcReqConsulAttribute, hpcReqs)
 	if err != nil {
 		err = errors.Wrapf(err, "Failed to store HPC requirement details for deployment %s node %s",
 			e.DeploymentID, e.NodeName)
-		return err
+		return cloudReqs, hpcReqs, datasetReqs, err
 	}
 	err = deployments.SetAttributeComplexForAllInstances(ctx, e.DeploymentID, e.NodeName,
 		datasetReqConsulAttribute, datasetReqs)
 	if err != nil {
 		err = errors.Wrapf(err, "Failed to store dataset requirement details for deployment %s node %s",
 			e.DeploymentID, e.NodeName)
-		return err
+		return cloudReqs, hpcReqs, datasetReqs, err
 	}
 
-	return err
+	return cloudReqs, hpcReqs, datasetReqs, err
 }
 
 // getCloudRequirement finds requirements of a cloud compute instance
@@ -607,4 +692,78 @@ func (e *SetLocationsExecution) getDatasetRequirementFromEnvInputs() (DatasetReq
 	}
 
 	return req, err
+}
+
+// getMaxSize convers newSizeStr according to the unint specified and returned the max
+// of this result and size value argument
+// Unit can be:
+// B for byte
+// MB for MegaBytes
+// GB for GigaBytes
+func getMaxSize(size int, newSizeStr, unit string) (int, error) {
+	res, err := humanize.ParseBytes(newSizeStr)
+	if err != nil {
+		return size, err
+	}
+
+	newSizeBytes := int(res)
+	var newSize int
+	switch unit {
+	case "MB":
+		newSize = newSizeBytes / 1000 / 1000
+	case "GB":
+		newSize = newSizeBytes / 1000 / 1000 / 1000
+	default:
+		newSize = newSizeBytes
+	}
+
+	if newSize < size {
+		newSize = size
+	}
+
+	return newSize, err
+}
+
+func getMaxCPU(cpuNumber int, newCPUNumberStr string) (int, error) {
+	res, err := strconv.Atoi(newCPUNumberStr)
+	if err != nil {
+		return cpuNumber, err
+	}
+
+	if res > cpuNumber {
+		return res, err
+	}
+
+	return cpuNumber, err
+}
+
+func getOSVersion(req CloudRequirement) string {
+	var osDistribution, osVersion string
+	if req.OSType == "windows" {
+		return req.OSType
+	}
+	switch req.OSDistribution {
+	case "centos":
+		osDistribution = "CentOS"
+	case "debian":
+		osDistribution = "Debian"
+	case "fedora":
+		osDistribution = "Fedora"
+	default:
+		osDistribution = "Ubuntu"
+	}
+
+	if req.OSVersion == "" {
+		switch osDistribution {
+		case "centos":
+			osVersion = "8"
+		case "debian":
+			osVersion = "10-buster"
+		case "fedora":
+			osVersion = "33"
+		default:
+			osVersion = "18.04-LTS-bionic"
+		}
+	}
+	return fmt.Sprintf("%s-%s", osDistribution, osVersion)
 }

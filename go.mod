@@ -3,6 +3,7 @@ module github.com/laurentganne/yorc-dynamic-orchestration-plugin
 go 1.15
 
 require (
+	github.com/dustin/go-humanize v0.0.0-20171111073723-bb3d318650d4
 	github.com/hashicorp/consul v1.2.3
 	github.com/laurentganne/yorcoidc v0.1.4
 	github.com/pkg/errors v0.9.1
