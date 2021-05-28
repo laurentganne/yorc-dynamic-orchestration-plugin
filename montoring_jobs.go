@@ -43,17 +43,21 @@ const (
 	// TaskStatusDoneMsg is the message returned when a task is done
 	TaskStatusDoneMsg = "Done"
 
-	requestIDConsulAttribute = "request_id"
-	requestStatusPending     = "PENDING"
-	requestStatusRunning     = "RUNNING"
-	requestStatusCompleted   = "COMPLETED"
+	requestIDConsulAttribute   = "request_id"
+	requestTypeConsulAttribute = "request_type"
+	requestTypeCloud           = "cloud"
+	requestTypeHPC             = "hpc"
+	requestStatusPending       = "PENDING"
+	requestStatusRunning       = "RUNNING"
+	requestStatusCompleted     = "COMPLETED"
 
 	// computeBestLocationAction is the action of computing the best location
 	computeBestLocationAction = "compute-best-location"
 
-	actionDataNodeName  = "nodeName"
-	actionDataRequestID = "requestID"
-	actionDataTaskID    = "taskID"
+	actionDataNodeName    = "nodeName"
+	actionDataRequestID   = "requestID"
+	actionDataRequestType = "requestType"
+	actionDataTaskID      = "taskID"
 )
 
 // ActionOperator holds function allowing to execute an action
@@ -92,8 +96,14 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		return true, errors.Errorf("Missing mandatory information requestID for actionType:%q", action.ActionType)
 	}
 
+	requestType, ok := action.Data[actionDataRequestType]
+	if !ok {
+		return true, errors.Errorf("Missing mandatory information requestType for actionType:%q", action.ActionType)
+	}
+
 	var cloudPlacement blu.CloudPlacement
 	var hpcPlacement blu.HPCPlacement
+	var status string
 	switch action.ActionType {
 	case computeBestLocationAction:
 		locationMgr, err := locations.GetManager(cfg)
@@ -122,14 +132,26 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		if err != nil {
 			return true, err
 		}
-		cloudPlacement, err = client.GetCloudPlacementRequestStatus(accessToken, requestID)
-		if err != nil {
-			return true, err
-		}
+		if requestType == requestTypeCloud {
+			cloudPlacement, err = client.GetCloudPlacementRequestStatus(accessToken, requestID)
+			if err != nil {
+				return true, err
+			}
+			status = cloudPlacement.Status
+			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
+				"Component %s received from BLU cloud placement results %+v",
+				actionData.nodeName, cloudPlacement)
+		} else {
+			hpcPlacement, err = client.GetHPCPlacementRequestStatus(accessToken, requestID)
+			if err != nil {
+				return true, err
+			}
+			status = hpcPlacement.Status
+			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
+				"Component %s received from BLU HPC placement results %+v",
+				actionData.nodeName, hpcPlacement)
 
-		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
-			"Component %s received from BLU cloud placement results %+v",
-			actionData.nodeName, cloudPlacement)
+		}
 
 	default:
 		err = errors.Errorf("Unsupported action %s", action.ActionType)
@@ -138,7 +160,6 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		return true, err
 	}
 
-	status := cloudPlacement.Status
 	var requestStatus string
 	var errorMessage string
 	switch {
@@ -159,7 +180,7 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		// job has been done successfully : unregister monitoring
 		deregister = true
 		// Update locations
-		err = o.setLocations(ctx, deploymentID, actionData.nodeName, cloudPlacement, hpcPlacement)
+		err = o.setLocations(ctx, cfg, deploymentID, actionData.nodeName, cloudPlacement, hpcPlacement)
 	case requestStatusPending, requestStatusRunning:
 		// job's still running or its state is about to be set definitively: monitoring is keeping on (deregister stays false)
 	default:
@@ -199,7 +220,7 @@ func (o *ActionOperator) getActionData(action *prov.Action) (*actionData, error)
 	return actionData, nil
 }
 
-func (o *ActionOperator) setLocations(ctx context.Context, deploymentID, nodeName string,
+func (o *ActionOperator) setLocations(ctx context.Context, cfg config.Configuration, deploymentID, nodeName string,
 	cloudPlacement blu.CloudPlacement, hpcPlacement blu.HPCPlacement) error {
 
 	var err error
@@ -219,7 +240,7 @@ func (o *ActionOperator) setLocations(ctx context.Context, deploymentID, nodeNam
 	}
 
 	// Compute locations fulfilling these requirements
-	cloudLocations, hpcLocations, err := o.computeLocations(ctx, deploymentID, nodeName, cloudReqs, hpcReqs, datasetReqs,
+	cloudLocations, hpcLocations, err := o.computeLocations(ctx, cfg, deploymentID, nodeName, cloudReqs, hpcReqs, datasetReqs,
 		cloudPlacement, hpcPlacement)
 	if err != nil {
 		return err
@@ -236,23 +257,19 @@ func (o *ActionOperator) setLocations(ctx context.Context, deploymentID, nodeNam
 	return err
 }
 
-func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nodeName string, cloudReqs map[string]CloudRequirement,
+func (o *ActionOperator) computeLocations(ctx context.Context, cfg config.Configuration, deploymentID, nodeName string, cloudReqs map[string]CloudRequirement,
 	hpcReqs map[string]HPCRequirement, datasetReqs map[string]DatasetRequirement,
 	cloudPlacement blu.CloudPlacement, hpcPlacement blu.HPCPlacement) (map[string]CloudLocation, map[string]HPCLocation, error) {
 
 	cloudLocations := make(map[string]CloudLocation)
 	hpcLocations := make(map[string]HPCLocation)
 	var err error
-	var cloudLocationName string
-	var cloudLocation blu.CloudLocation
-	if len(cloudPlacement.Message) > 0 {
-		cloudLocation = cloudPlacement.Message[0]
-		cloudLocationName = cloudPlacement.Message[0].Location + "_openstack"
-	} else {
-		cloudLocationName = "it4i_openstack"
-		log.Printf("Using default location %s", cloudLocationName)
+
+	if len(cloudPlacement.Message) == 0 && len(cloudReqs) > 0 {
+		return cloudLocations, hpcLocations, errors.Errorf("%s Found no Cloud location for compute instance", nodeName)
 	}
 
+	resIndex := 0
 	for nodeName, req := range cloudReqs {
 		// Get user according to the version
 		user := "ubuntu"
@@ -264,11 +281,16 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 		}
 
 		cloudLocations[nodeName] = CloudLocation{
-			Name:           cloudLocationName,
-			Flavor:         cloudLocation.Flavor,
-			ImageID:        cloudLocation.ImageID,
-			FloatingIPPool: cloudLocation.FloatingIPPool,
+			Name:           cloudPlacement.Message[resIndex].Location + "_openstack",
+			Flavor:         cloudPlacement.Message[resIndex].Flavor,
+			ImageID:        cloudPlacement.Message[resIndex].ImageID,
+			FloatingIPPool: cloudPlacement.Message[resIndex].FloatingIPPool,
 			User:           user,
+		}
+		if resIndex < len(cloudPlacement.Message)-1 {
+			resIndex = resIndex + 1
+		} else {
+			resIndex = 0
 		}
 	}
 
@@ -287,25 +309,33 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 		nodesLocations[n] = val.Name
 	}
 
+	if len(hpcPlacement.Message) == 0 && len(hpcReqs) > 0 {
+		return cloudLocations, hpcLocations, errors.Errorf("%s Found no HPC location for HEAppE job to submit", nodeName)
+	}
+	resIndex = 0
 	for nodeName, jobSpec := range hpcReqs {
-		location := "it4i_heappe"
-
-		if strings.HasPrefix(strings.ToLower(jobSpec.Tasks[0].Name), "runtraf") ||
-			strings.HasPrefix(strings.ToLower(jobSpec.Tasks[0].Name), "openfoam") {
-			location = "it4i_heappe_wp5"
-		}
 
 		taskLocation := TaskLocation{
-			NodeTypeID:        jobSpec.Tasks[0].ClusterNodeTypeID,
-			CommandTemplateID: jobSpec.Tasks[0].CommandTemplateID,
+			NodeTypeID:        hpcPlacement.Message[resIndex].TaskLocations[0].ClusterNodeTypeID,
+			CommandTemplateID: hpcPlacement.Message[resIndex].TaskLocations[0].CommandTemplateID,
 		}
 		tasksLocations := map[string]TaskLocation{
 			jobSpec.Tasks[0].Name: taskLocation,
 		}
+		location, err := findHEAppELocation(cfg, hpcPlacement.Message[resIndex].URL, hpcPlacement.Message[resIndex].Location)
+		if err != nil {
+			return cloudLocations, hpcLocations, err
+		}
 		hpcLocations[nodeName] = HPCLocation{
 			Name:          location,
-			Project:       jobSpec.Project,
+			Project:       hpcPlacement.Message[resIndex].Project,
 			TasksLocation: tasksLocations,
+		}
+
+		if resIndex < len(hpcPlacement.Message)-1 {
+			resIndex = resIndex + 1
+		} else {
+			resIndex = 0
 		}
 	}
 
@@ -334,6 +364,61 @@ func (o *ActionOperator) computeLocations(ctx context.Context, deploymentID, nod
 
 }
 
+func findHEAppELocation(cfg config.Configuration, url, site string) (string, error) {
+
+	var locationName string
+	locationMgr, err := locations.GetManager(cfg)
+	if err != nil {
+		return locationName, err
+	}
+
+	locConfigs, err := locationMgr.GetLocations()
+	if err != nil {
+		return locationName, err
+	}
+
+	var sameTypeLocationConfig, sameSiteLocationConfig locations.LocationConfiguration
+	for _, locationConfig := range locConfigs {
+		if locationConfig.Type == "heappe" {
+			sameTypeLocationConfig = locationConfig
+			if url == locationConfig.Properties.GetString("url") {
+				locationName = locationConfig.Name
+			}
+			// Convention: the first section of location identify the datacenter
+			siteID := strings.ToLower(strings.SplitN(locationConfig.Name, "_", 2)[0])
+			if siteID == site {
+				sameSiteLocationConfig = locationConfig
+			}
+		}
+	}
+
+	if locationName != "" {
+		return locationName, err
+	}
+
+	if sameSiteLocationConfig.Name != "" {
+		// Adding a new location
+		sameSiteLocationConfig.Name = sameSiteLocationConfig.Name + "-" + path.Base(url)
+		sameSiteLocationConfig.Properties.Set("url", url)
+
+		err = locationMgr.CreateLocation(sameSiteLocationConfig)
+
+		return sameSiteLocationConfig.Name, err
+	}
+
+	if sameTypeLocationConfig.Name != "" {
+		// Adding a new location
+		sameTypeLocationConfig.Name = site + "_" + path.Base(url)
+		sameTypeLocationConfig.Properties.Set("url", url)
+
+		err = locationMgr.CreateLocation(sameTypeLocationConfig)
+
+		return sameTypeLocationConfig.Name, err
+	}
+
+	return locationName, errors.Errorf("Found no HEAppE location")
+
+}
 func (o *ActionOperator) assignCloudLocations(ctx context.Context, deploymentID string,
 	requirements map[string]CloudRequirement, locations map[string]CloudLocation) error {
 

@@ -25,14 +25,13 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/consul/api"
 	"github.com/laurentganne/yorc-dynamic-orchestration-plugin/blu"
-	"github.com/laurentganne/yorcoidc"
+	"github.com/lexis-project/yorcoidc"
 
 	"github.com/pkg/errors"
 
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
-	"github.com/ystia/yorc/v4/log"
 	"github.com/ystia/yorc/v4/prov"
 	"github.com/ystia/yorc/v4/prov/operations"
 	"github.com/ystia/yorc/v4/tosca"
@@ -163,10 +162,16 @@ func (e *SetLocationsExecution) ExecuteAsync(ctx context.Context) (*prov.Action,
 		return nil, 0, err
 	}
 
+	requestType, err := e.getRequestType(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	data := make(map[string]string)
 	data[actionDataTaskID] = e.TaskID
 	data[actionDataNodeName] = e.NodeName
 	data[actionDataRequestID] = requestID
+	data[actionDataRequestType] = requestType
 
 	return &prov.Action{ActionType: computeBestLocationAction, Data: data}, e.MonitoringTimeInterval, err
 }
@@ -230,6 +235,16 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 	var bluStorageInputs []blu.StorageInput
 	for nodeName, datasetReq := range datasetReqs {
 		var storageInput blu.StorageInput
+		storageLocs := datasetReq.Locations
+		// BLU expects the location to be on iRODS, while the workflow can
+		// get directly data from a HEAppE job
+		if len(storageLocs) == 1 {
+			loc := storageLocs[0]
+			if !strings.Contains(loc, "iRODS") {
+				siteID := strings.ToLower(strings.SplitN(loc, "_", 2)[0])
+				storageLocs[0] = fmt.Sprintf("%s_iRODS", siteID)
+			}
+		}
 		storageInput.Locations = datasetReq.Locations
 		storageInput.Size, err = getMaxSize(0, datasetReq.Size, "B")
 		if err != nil {
@@ -270,9 +285,14 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		bluCloudReq.StorageInputs = bluStorageInputs
 	}
 
-	// TODO: manage HPC placements
-	if len(hpcReqs) > 0 {
-		log.Printf("TODO: manage HPC requirements %v", hpcReqs)
+	var bluHPCReq blu.HPCRequirement
+	bluHPCReq.Number = len(hpcReqs)
+	for _, hpcReq := range hpcReqs {
+		bluHPCReq.Project = e.ProjectID
+		bluHPCReq.MaxWallTime = hpcReq.Tasks[0].WalltimeLimit
+		bluHPCReq.MaxCores = hpcReq.Tasks[0].MaxCores
+		bluHPCReq.TaskName = hpcReq.Tasks[0].Name
+		bluHPCReq.StorageInputs = bluStorageInputs
 	}
 
 	var refreshTokenFunc blu.RefreshTokenFunc = func() (string, error) {
@@ -289,25 +309,49 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		return err
 	}
 
-	reqVal, _ := json.Marshal(bluCloudReq)
-	events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-		"Component %s submitting to BLU cloud placement request %+s",
-		e.NodeName, string(reqVal))
+	var requestID string
+	var requestType string
+	if bluCloudReq.NumberOfInstances > 0 {
+		reqVal, _ := json.Marshal(bluCloudReq)
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+			"Component %s submitting to BLU cloud placement request %+s",
+			e.NodeName, string(reqVal))
+		submittedReq, err := client.SubmitCloudPlacementRequest(token, bluCloudReq)
+		if err != nil {
+			return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
+		}
 
-	submittedReq, err := client.SubmitCloudPlacementRequest(token, bluCloudReq)
-	if err != nil {
-		return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
-	}
+		if submittedReq.Status != blu.RequestStatusOK {
+			return errors.Errorf("Got response %v for Cloud placement request %+s", submittedReq, string(reqVal))
+		}
+		requestID = submittedReq.RequestID
+		requestType = requestTypeCloud
+	} else {
+		reqVal, _ := json.Marshal(bluHPCReq)
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
+			"Component %s submitting to BLU HPC placement request %+s",
+			e.NodeName, string(reqVal))
+		submittedReq, err := client.SubmitHPCPlacementRequest(token, bluHPCReq)
+		if err != nil {
+			return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
+		}
 
-	if submittedReq.Status != blu.RequestStatusOK {
-		return errors.Errorf("Got response %v for Cloud placement request %+s", submittedReq, string(reqVal))
+		if submittedReq.Status != blu.RequestStatusOK {
+			return errors.Errorf("Got response %v for HPC placement request %s", submittedReq, string(reqVal))
+		}
+		requestID = submittedReq.RequestID
+		requestType = requestTypeHPC
 	}
-	requestID := submittedReq.RequestID
-	// Store the request id
+	// Store the request id and type
 	err = deployments.SetAttributeForAllInstances(ctx, e.DeploymentID, e.NodeName,
 		requestIDConsulAttribute, requestID)
 	if err != nil {
 		return errors.Wrapf(err, "Request %s submitted, but failed to store this request id", requestID)
+	}
+	err = deployments.SetAttributeForAllInstances(ctx, e.DeploymentID, e.NodeName,
+		requestTypeConsulAttribute, requestType)
+	if err != nil {
+		return errors.Wrapf(err, "Request %s submitted, but failed to store the request type", requestID)
 	}
 	return err
 }
@@ -319,6 +363,18 @@ func (e *SetLocationsExecution) getRequestID(ctx context.Context) (string, error
 		return "", errors.Wrapf(err, "Failed to get request ID for deployment %s node %s", e.DeploymentID, e.NodeName)
 	} else if val == nil {
 		return "", errors.Errorf("Found no request id for deployment %s node %s", e.DeploymentID, e.NodeName)
+	}
+
+	return val.RawString(), err
+}
+
+func (e *SetLocationsExecution) getRequestType(ctx context.Context) (string, error) {
+
+	val, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID, e.NodeName, "0", requestTypeConsulAttribute)
+	if err != nil {
+		return "", errors.Wrapf(err, "Failed to get request type for deployment %s node %s", e.DeploymentID, e.NodeName)
+	} else if val == nil {
+		return "", errors.Errorf("Found no request type for deployment %s node %s", e.DeploymentID, e.NodeName)
 	}
 
 	return val.RawString(), err
@@ -490,8 +546,10 @@ func (e *SetLocationsExecution) getDatasetRequirement(ctx context.Context, targe
 		{field: &(datasetReq.NumberOfSmallFiles), propName: "number_of_small_files"},
 	}
 	for _, stringPropName := range stringPropNames {
-		val, err := deployments.GetInstanceCapabilityAttributeValue(ctx, e.DeploymentID,
-			targetName, ids[0], datasetInfoCapabilityName, stringPropName.propName)
+		// Using the attribute value instead of the capability attribute
+		// for compute instance datastes exposing attribute values
+		val, err := deployments.GetInstanceAttributeValue(ctx, e.DeploymentID,
+			targetName, ids[0], stringPropName.propName)
 		if err != nil {
 			return datasetReq, err
 		}
@@ -701,6 +759,9 @@ func (e *SetLocationsExecution) getDatasetRequirementFromEnvInputs() (DatasetReq
 // MB for MegaBytes
 // GB for GigaBytes
 func getMaxSize(size int, newSizeStr, unit string) (int, error) {
+	if newSizeStr == "" {
+		return size, nil
+	}
 	res, err := humanize.ParseBytes(newSizeStr)
 	if err != nil {
 		return size, err
@@ -725,11 +786,16 @@ func getMaxSize(size int, newSizeStr, unit string) (int, error) {
 }
 
 func getMaxCPU(cpuNumber int, newCPUNumberStr string) (int, error) {
-	res, err := strconv.Atoi(newCPUNumberStr)
-	if err != nil {
-		return cpuNumber, err
+	var res int
+	var err error
+	if newCPUNumberStr == "" {
+		res = 1
+	} else {
+		res, err = strconv.Atoi(newCPUNumberStr)
+		if err != nil {
+			return cpuNumber, err
+		}
 	}
-
 	if res > cpuNumber {
 		return res, err
 	}

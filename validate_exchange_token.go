@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/api"
-	"github.com/laurentganne/yorcoidc"
+	"github.com/lexis-project/yorcoidc"
 	"github.com/pkg/errors"
 
 	"github.com/ystia/yorc/v4/config"

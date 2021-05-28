@@ -37,12 +37,12 @@ type CloudRequirement struct {
 
 // HPCRequirement holds parameters of requirements for HPC jobs to create
 type HPCRequirement struct {
-	NumberOfLocations int            `json:"number"`
-	Project           string         `json:"project"`
-	MaxWallTime       int            `json:"max_walltime"`
-	MaxCores          int            `json:"max_cores"`
-	TaskName          string         `json:"taskName"`
-	StorageInputs     []StorageInput `json:"storage_inputs"`
+	Number        int            `json:"number"`
+	Project       string         `json:"project"`
+	MaxWallTime   int            `json:"max_walltime"`
+	MaxCores      int            `json:"max_cores"`
+	TaskName      string         `json:"taskName"`
+	StorageInputs []StorageInput `json:"storage_inputs"`
 }
 
 // SubmittedRequestInfo holds the result of a request submission
@@ -63,16 +63,17 @@ type CloudLocation struct {
 
 // TaskLocation holds properties of a selected HPC infrastructure for a HEAppE task
 type TaskLocation struct {
-	ClusterNodeTypeID string `json:"cluster_node_type_id"`
-	CommandTemplateID string `json:"command_template_id"`
+	ClusterNodeTypeID int    `json:"cluster_node_type_id"`
+	CommandTemplateID int    `json:"command_template_id"`
 	TaskName          string `json:"name"`
 }
 
 // HPCLocation holds properties of a selected HPC location
 type HPCLocation struct {
-	Flavor                string         `json:"HEAppE_URL"`
-	ImageID               string         `json:"cluster_id"`
+	URL                   string         `json:"HEAppE_URL"`
+	ClusterID             int            `json:"cluster_id"`
 	Location              string         `json:"location"`
+	Project               string         `json:"project"`
 	StorageInputLocations []string       `json:"storage_inputs"`
 	TaskLocations         []TaskLocation `json:"tasks"`
 }
