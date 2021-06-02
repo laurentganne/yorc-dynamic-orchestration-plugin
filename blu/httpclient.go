@@ -63,21 +63,16 @@ func (c *httpclient) newRequest(method, path string, body io.Reader) (*http.Requ
 
 func (c *httpclient) doRequest(method, path string, expectedStatuses []int, token string, payload, result interface{}) error {
 
-	var reqBody io.Reader
+	var jsonParam []byte
+	var err error
 	if payload != nil {
-		jsonParam, err := json.Marshal(payload)
+		jsonParam, err = json.Marshal(payload)
 		if err != nil {
 			return err
 		}
-		reqBody = bytes.NewBuffer(jsonParam)
 	}
 
 	log.Debugf("Sending request %s to %s", method, c.baseURL+path)
-
-	request, err := c.newRequest(method, path, reqBody)
-	if err != nil {
-		return err
-	}
 
 	tokenRefreshed := (token == "")
 	done := false
@@ -85,6 +80,17 @@ func (c *httpclient) doRequest(method, path string, expectedStatuses []int, toke
 	var response *http.Response
 
 	for !done {
+		var reqBody io.Reader
+		if len(jsonParam) != 0 {
+			reqBody = bytes.NewBuffer(jsonParam)
+		}
+
+		var request *http.Request
+		request, err = c.newRequest(method, path, reqBody)
+		if err != nil {
+			return err
+		}
+
 		if newToken != "" {
 			request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", newToken))
 		}
