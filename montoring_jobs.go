@@ -21,7 +21,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/laurentganne/yorc-dynamic-orchestration-plugin/blu"
+	"github.com/laurentganne/yorc-dynamic-orchestration-plugin/dam"
 	"github.com/pkg/errors"
 	"github.com/ystia/yorc/v4/config"
 	"github.com/ystia/yorc/v4/deployments"
@@ -101,8 +101,8 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		return true, errors.Errorf("Missing mandatory information requestType for actionType:%q", action.ActionType)
 	}
 
-	var cloudPlacement blu.CloudPlacement
-	var hpcPlacement blu.HPCPlacement
+	var cloudPlacement dam.CloudPlacement
+	var hpcPlacement dam.HPCPlacement
 	var status string
 	switch action.ActionType {
 	case computeBestLocationAction:
@@ -119,11 +119,11 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 			return true, errors.Errorf("Found no location of type %s", bluInfrastructureType)
 		}
 
-		var refreshTokenFunc blu.RefreshTokenFunc = func() (string, error) {
+		var refreshTokenFunc dam.RefreshTokenFunc = func() (string, error) {
 			accessToken, _, err := refreshToken(ctx, locationProps, deploymentID)
 			return accessToken, err
 		}
-		client, err := blu.GetClient(locationProps, refreshTokenFunc)
+		client, err := dam.GetClient(locationProps, refreshTokenFunc)
 		if err != nil {
 			return true, err
 		}
@@ -163,7 +163,7 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 	var requestStatus string
 	var errorMessage string
 	switch {
-	case status == blu.RequestStatusOK:
+	case status == dam.RequestStatusOK:
 		requestStatus = requestStatusCompleted
 	default:
 		return true, errors.Errorf("Unexpected status :%q", status)
@@ -221,7 +221,7 @@ func (o *ActionOperator) getActionData(action *prov.Action) (*actionData, error)
 }
 
 func (o *ActionOperator) setLocations(ctx context.Context, cfg config.Configuration, deploymentID, nodeName string,
-	cloudPlacement blu.CloudPlacement, hpcPlacement blu.HPCPlacement) error {
+	cloudPlacement dam.CloudPlacement, hpcPlacement dam.HPCPlacement) error {
 
 	var err error
 
@@ -259,7 +259,7 @@ func (o *ActionOperator) setLocations(ctx context.Context, cfg config.Configurat
 
 func (o *ActionOperator) computeLocations(ctx context.Context, cfg config.Configuration, deploymentID, nodeName string, cloudReqs map[string]CloudRequirement,
 	hpcReqs map[string]HPCRequirement, datasetReqs map[string]DatasetRequirement,
-	cloudPlacement blu.CloudPlacement, hpcPlacement blu.HPCPlacement) (map[string]CloudLocation, map[string]HPCLocation, error) {
+	cloudPlacement dam.CloudPlacement, hpcPlacement dam.HPCPlacement) (map[string]CloudLocation, map[string]HPCLocation, error) {
 
 	cloudLocations := make(map[string]CloudLocation)
 	hpcLocations := make(map[string]HPCLocation)

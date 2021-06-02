@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blu
+// Dynamic Allocator Module (DAM) interface
+
+package dam
 
 import (
 	"net/http"
@@ -39,7 +41,7 @@ const (
 // RefreshTokenFunc is a type of function provided by the caller to refresh a token when needed
 type RefreshTokenFunc func() (newAccessToken string, err error)
 
-// Client is the client interface to the Business Logic Unit (BLU) service
+// Client is the client interface to the Dynamic Allocator Module (DAM) service
 type Client interface {
 	// SubmitCloudPlacementRequest submits a request to find the best placement for cloud compute instances
 	SubmitCloudPlacementRequest(token string, requirement CloudRequirement) (SubmittedRequestInfo, error)

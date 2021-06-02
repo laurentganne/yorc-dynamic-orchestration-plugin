@@ -24,7 +24,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/consul/api"
-	"github.com/laurentganne/yorc-dynamic-orchestration-plugin/blu"
+	"github.com/laurentganne/yorc-dynamic-orchestration-plugin/dam"
 	"github.com/lexis-project/yorcoidc"
 
 	"github.com/pkg/errors"
@@ -232,9 +232,9 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		return err
 	}
 
-	var bluStorageInputs []blu.StorageInput
+	var bluStorageInputs []dam.StorageInput
 	for nodeName, datasetReq := range datasetReqs {
-		var storageInput blu.StorageInput
+		var storageInput dam.StorageInput
 		storageLocs := datasetReq.Locations
 		// BLU expects the location to be on iRODS, while the workflow can
 		// get directly data from a HEAppE job
@@ -260,7 +260,7 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		}
 		bluStorageInputs = append(bluStorageInputs, storageInput)
 	}
-	var bluCloudReq blu.CloudRequirement
+	var bluCloudReq dam.CloudRequirement
 	bluCloudReq.NumberOfLocations = 1
 	for nodeName, cloudReq := range cloudReqs {
 		bluCloudReq.NumberOfInstances = bluCloudReq.NumberOfInstances + 1
@@ -285,7 +285,7 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		bluCloudReq.StorageInputs = bluStorageInputs
 	}
 
-	var bluHPCReq blu.HPCRequirement
+	var bluHPCReq dam.HPCRequirement
 	bluHPCReq.Number = len(hpcReqs)
 	for _, hpcReq := range hpcReqs {
 		bluHPCReq.Project = e.ProjectID
@@ -295,7 +295,7 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		bluHPCReq.StorageInputs = bluStorageInputs
 	}
 
-	var refreshTokenFunc blu.RefreshTokenFunc = func() (string, error) {
+	var refreshTokenFunc dam.RefreshTokenFunc = func() (string, error) {
 		accessToken, _, err := refreshToken(ctx, e.LocationProps, e.DeploymentID)
 		return accessToken, err
 	}
@@ -304,7 +304,7 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 	if err != nil {
 		return err
 	}
-	client, err := blu.GetClient(e.LocationProps, refreshTokenFunc)
+	client, err := dam.GetClient(e.LocationProps, refreshTokenFunc)
 	if err != nil {
 		return err
 	}
@@ -321,7 +321,7 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 			return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
 		}
 
-		if submittedReq.Status != blu.RequestStatusOK {
+		if submittedReq.Status != dam.RequestStatusOK {
 			return errors.Errorf("Got response %v for Cloud placement request %+s", submittedReq, string(reqVal))
 		}
 		requestID = submittedReq.RequestID
@@ -336,7 +336,7 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 			return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
 		}
 
-		if submittedReq.Status != blu.RequestStatusOK {
+		if submittedReq.Status != dam.RequestStatusOK {
 			return errors.Errorf("Got response %v for HPC placement request %s", submittedReq, string(reqVal))
 		}
 		requestID = submittedReq.RequestID

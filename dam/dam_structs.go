@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blu
+// Dynamic Allocator Module (DAM) structures
+package dam
 
 // StorageInput holds properties of storage inputs that will be used be transferred
 // to the Cloud instance or HEApPE Job
