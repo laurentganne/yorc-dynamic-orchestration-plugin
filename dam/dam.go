@@ -35,7 +35,7 @@ const (
 	evaluateHPCEndpoint    = "/evaluate/machines?type=hpc"
 	evaluateStatusEndpoint = "/get/machines"
 
-	locationBLUURLPropertyName = "url"
+	locationDynamicAllocatorModuleURLPropertyName = "url"
 )
 
 // RefreshTokenFunc is a type of function provided by the caller to refresh a token when needed
@@ -56,24 +56,24 @@ type Client interface {
 // GetClient returns a DDI client for a given location
 func GetClient(locationProps config.DynamicMap, refreshTokenFunc RefreshTokenFunc) (Client, error) {
 
-	url := locationProps.GetString(locationBLUURLPropertyName)
+	url := locationProps.GetString(locationDynamicAllocatorModuleURLPropertyName)
 	if url == "" {
-		return nil, errors.Errorf("No %s property defined in BLU location configuration", locationBLUURLPropertyName)
+		return nil, errors.Errorf("No %s property defined in Dynamic Allocator Module location configuration", locationDynamicAllocatorModuleURLPropertyName)
 	}
 
-	return &bluClient{
+	return &damClient{
 		URL:        url,
 		httpClient: getHTTPClient(url, refreshTokenFunc),
 	}, nil
 }
 
-type bluClient struct {
+type damClient struct {
 	httpClient *httpclient
 	URL        string
 }
 
 // SubmitCloudPlacementRequest submits a request to find the best placement for cloud compute instances
-func (b *bluClient) SubmitCloudPlacementRequest(token string, requirement CloudRequirement) (SubmittedRequestInfo, error) {
+func (b *damClient) SubmitCloudPlacementRequest(token string, requirement CloudRequirement) (SubmittedRequestInfo, error) {
 
 	var response SubmittedRequestInfo
 	err := b.httpClient.doRequest(http.MethodPost, evaluateCloudEndpoint,
@@ -87,7 +87,7 @@ func (b *bluClient) SubmitCloudPlacementRequest(token string, requirement CloudR
 }
 
 // SubmitHPCPlacementRequest submits a request to find the best placement for HPC HEAppE job
-func (b *bluClient) SubmitHPCPlacementRequest(token string, requirement HPCRequirement) (SubmittedRequestInfo, error) {
+func (b *damClient) SubmitHPCPlacementRequest(token string, requirement HPCRequirement) (SubmittedRequestInfo, error) {
 
 	var response SubmittedRequestInfo
 	err := b.httpClient.doRequest(http.MethodPost, evaluateHPCEndpoint,
@@ -101,7 +101,7 @@ func (b *bluClient) SubmitHPCPlacementRequest(token string, requirement HPCRequi
 }
 
 // GetCloudPlacementRequestStatus returns the status of a request to find the best cloud placement
-func (b *bluClient) GetCloudPlacementRequestStatus(token string, requestID string) (CloudPlacement, error) {
+func (b *damClient) GetCloudPlacementRequestStatus(token string, requestID string) (CloudPlacement, error) {
 
 	var response CloudPlacement
 	err := b.httpClient.doRequest(http.MethodGet, path.Join(evaluateStatusEndpoint, requestID),
@@ -114,7 +114,7 @@ func (b *bluClient) GetCloudPlacementRequestStatus(token string, requestID strin
 }
 
 // GetHPCPlacementRequestStatus returns the status of a request to find the best HPC placement
-func (b *bluClient) GetHPCPlacementRequestStatus(token string, requestID string) (HPCPlacement, error) {
+func (b *damClient) GetHPCPlacementRequestStatus(token string, requestID string) (HPCPlacement, error) {
 
 	var response HPCPlacement
 	err := b.httpClient.doRequest(http.MethodGet, path.Join(evaluateStatusEndpoint, requestID),

@@ -53,7 +53,7 @@ const (
 	hostCapabilityName               = "host"
 	osCapabilityName                 = "os"
 	datasetInfoCapabilityName        = "dataset_info"
-	bluInfrastructureType            = "blu"
+	damInfrastructureType            = "dam"
 )
 
 // SetLocationsExecution holds Locations computation properties
@@ -232,11 +232,11 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		return err
 	}
 
-	var bluStorageInputs []dam.StorageInput
+	var damStorageInputs []dam.StorageInput
 	for nodeName, datasetReq := range datasetReqs {
 		var storageInput dam.StorageInput
 		storageLocs := datasetReq.Locations
-		// BLU expects the location to be on iRODS, while the workflow can
+		// Dynamic Allocator Module expects the location to be on iRODS, while the workflow can
 		// get directly data from a HEAppE job
 		if len(storageLocs) == 1 {
 			loc := storageLocs[0]
@@ -258,41 +258,41 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 					datasetReq.NumberOfFiles, nodeName)
 			}
 		}
-		bluStorageInputs = append(bluStorageInputs, storageInput)
+		damStorageInputs = append(damStorageInputs, storageInput)
 	}
-	var bluCloudReq dam.CloudRequirement
-	bluCloudReq.NumberOfLocations = 1
+	var damCloudReq dam.CloudRequirement
+	damCloudReq.NumberOfLocations = 1
 	for nodeName, cloudReq := range cloudReqs {
-		bluCloudReq.NumberOfInstances = bluCloudReq.NumberOfInstances + 1
-		bluCloudReq.Project = e.ProjectID
-		bluCloudReq.OSVersion = getOSVersion(cloudReq)
-		bluCloudReq.MaxWallTime = 1000
-		bluCloudReq.CPUs, err = getMaxCPU(bluCloudReq.CPUs, cloudReq.NumCPUs)
+		damCloudReq.NumberOfInstances = damCloudReq.NumberOfInstances + 1
+		damCloudReq.Project = e.ProjectID
+		damCloudReq.OSVersion = getOSVersion(cloudReq)
+		damCloudReq.MaxWallTime = 1000
+		damCloudReq.CPUs, err = getMaxCPU(damCloudReq.CPUs, cloudReq.NumCPUs)
 		if err != nil {
 			return errors.Wrapf(err, "Unexpected number of CPUs %s in compute instance requirement %s",
 				cloudReq.NumCPUs, nodeName)
 		}
-		bluCloudReq.Memory, err = getMaxSize(bluCloudReq.CPUs, cloudReq.MemSize, "MB")
+		damCloudReq.Memory, err = getMaxSize(damCloudReq.CPUs, cloudReq.MemSize, "MB")
 		if err != nil {
 			return errors.Wrapf(err, "Unexpected memory size %s in compute instance requirement %s",
 				cloudReq.MemSize, nodeName)
 		}
-		bluCloudReq.Disk, err = getMaxSize(bluCloudReq.CPUs, cloudReq.DiskSize, "GB")
+		damCloudReq.Disk, err = getMaxSize(damCloudReq.CPUs, cloudReq.DiskSize, "GB")
 		if err != nil {
 			return errors.Wrapf(err, "Unexpected disk size %s in compute instance requirement %s",
 				cloudReq.DiskSize, nodeName)
 		}
-		bluCloudReq.StorageInputs = bluStorageInputs
+		damCloudReq.StorageInputs = damStorageInputs
 	}
 
-	var bluHPCReq dam.HPCRequirement
-	bluHPCReq.Number = len(hpcReqs)
+	var damHPCReq dam.HPCRequirement
+	damHPCReq.Number = len(hpcReqs)
 	for _, hpcReq := range hpcReqs {
-		bluHPCReq.Project = e.ProjectID
-		bluHPCReq.MaxWallTime = hpcReq.Tasks[0].WalltimeLimit
-		bluHPCReq.MaxCores = hpcReq.Tasks[0].MaxCores
-		bluHPCReq.TaskName = hpcReq.Tasks[0].Name
-		bluHPCReq.StorageInputs = bluStorageInputs
+		damHPCReq.Project = e.ProjectID
+		damHPCReq.MaxWallTime = hpcReq.Tasks[0].WalltimeLimit
+		damHPCReq.MaxCores = hpcReq.Tasks[0].MaxCores
+		damHPCReq.TaskName = hpcReq.Tasks[0].Name
+		damHPCReq.StorageInputs = damStorageInputs
 	}
 
 	var refreshTokenFunc dam.RefreshTokenFunc = func() (string, error) {
@@ -311,12 +311,12 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 
 	var requestID string
 	var requestType string
-	if bluCloudReq.NumberOfInstances > 0 {
-		reqVal, _ := json.Marshal(bluCloudReq)
+	if damCloudReq.NumberOfInstances > 0 {
+		reqVal, _ := json.Marshal(damCloudReq)
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-			"Component %s submitting to BLU cloud placement request %+s",
+			"Component %s submitting to Dynamic Allocator Module cloud placement request %+s",
 			e.NodeName, string(reqVal))
-		submittedReq, err := client.SubmitCloudPlacementRequest(token, bluCloudReq)
+		submittedReq, err := client.SubmitCloudPlacementRequest(token, damCloudReq)
 		if err != nil {
 			return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
 		}
@@ -327,11 +327,11 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		requestID = submittedReq.RequestID
 		requestType = requestTypeCloud
 	} else {
-		reqVal, _ := json.Marshal(bluHPCReq)
+		reqVal, _ := json.Marshal(damHPCReq)
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, e.DeploymentID).Registerf(
-			"Component %s submitting to BLU HPC placement request %+s",
+			"Component %s submitting to Dynamic Allocator Module HPC placement request %+s",
 			e.NodeName, string(reqVal))
-		submittedReq, err := client.SubmitHPCPlacementRequest(token, bluHPCReq)
+		submittedReq, err := client.SubmitHPCPlacementRequest(token, damHPCReq)
 		if err != nil {
 			return errors.Wrapf(err, "Failed to submit cloud placement request %s", string(reqVal))
 		}
@@ -519,7 +519,7 @@ func (e *SetLocationsExecution) getHPCRequirement(ctx context.Context, targetNam
 	if val != nil {
 		err = json.Unmarshal([]byte(val.RawString()), &hpcReq)
 		if err != nil {
-			err = errors.Wrapf(err, "Failed to unmarshal heappe job from string %s", val.RawString())
+			err = errors.Wrapf(err, "Failed to unmarshal HEAppE job from string %s", val.RawString())
 		}
 	}
 
@@ -648,7 +648,7 @@ func (e *SetLocationsExecution) getHPCRequirementFromEnvInputs() (HPCRequirement
 		case "JOB_SPECIFICATION":
 			err := json.Unmarshal([]byte(envInput.Value), &req)
 			if err != nil {
-				err = errors.Wrapf(err, "Failed to unmarshal heappe job from string %s", envInput.Value)
+				err = errors.Wrapf(err, "Failed to unmarshal HEAppE job from string %s", envInput.Value)
 			}
 			return req, err
 		default:
@@ -821,11 +821,11 @@ func getOSVersion(req CloudRequirement) string {
 
 	if req.OSVersion == "" {
 		switch osDistribution {
-		case "centos":
+		case "CentOS":
 			osVersion = "8"
-		case "debian":
+		case "Debian":
 			osVersion = "10-buster"
-		case "fedora":
+		case "Fedora":
 			osVersion = "33"
 		default:
 			osVersion = "18.04-LTS-bionic"

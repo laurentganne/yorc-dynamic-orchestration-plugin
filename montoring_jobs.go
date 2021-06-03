@@ -36,13 +36,6 @@ import (
 )
 
 const (
-	// TaskStatusPendingMsg is the message returned when a task is pending
-	TaskStatusPendingMsg = "Task still in the queue, or task does not exist"
-	// TaskStatusInProgressMsg is the message returned when a task is in progress
-	TaskStatusInProgressMsg = "In progress"
-	// TaskStatusDoneMsg is the message returned when a task is done
-	TaskStatusDoneMsg = "Done"
-
 	requestIDConsulAttribute   = "request_id"
 	requestTypeConsulAttribute = "request_type"
 	requestTypeCloud           = "cloud"
@@ -111,12 +104,12 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 			return true, err
 		}
 		locationProps, err := locationMgr.GetLocationPropertiesForNode(ctx,
-			deploymentID, actionData.nodeName, bluInfrastructureType)
+			deploymentID, actionData.nodeName, damInfrastructureType)
 		if err != nil {
 			return true, err
 		}
 		if len(locationProps) == 0 {
-			return true, errors.Errorf("Found no location of type %s", bluInfrastructureType)
+			return true, errors.Errorf("Found no location of type %s", damInfrastructureType)
 		}
 
 		var refreshTokenFunc dam.RefreshTokenFunc = func() (string, error) {
@@ -139,7 +132,7 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 			}
 			status = cloudPlacement.Status
 			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
-				"Component %s received from BLU cloud placement results %+v",
+				"Component %s received from Dynamic Allocator Module cloud placement results %+v",
 				actionData.nodeName, cloudPlacement)
 		} else {
 			hpcPlacement, err = client.GetHPCPlacementRequestStatus(accessToken, requestID)
@@ -148,7 +141,7 @@ func (o *ActionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 			}
 			status = hpcPlacement.Status
 			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
-				"Component %s received from BLU HPC placement results %+v",
+				"Component %s received from Dynamic Allocator Module HPC placement results %+v",
 				actionData.nodeName, hpcPlacement)
 
 		}
@@ -245,7 +238,6 @@ func (o *ActionOperator) setLocations(ctx context.Context, cfg config.Configurat
 	if err != nil {
 		return err
 	}
-
 	// Assign locations to cloud instances
 	err = o.assignCloudLocations(ctx, deploymentID, cloudReqs, cloudLocations)
 	if err != nil {
@@ -322,7 +314,8 @@ func (o *ActionOperator) computeLocations(ctx context.Context, cfg config.Config
 		tasksLocations := map[string]TaskLocation{
 			jobSpec.Tasks[0].Name: taskLocation,
 		}
-		location, err := findHEAppELocation(cfg, hpcPlacement.Message[resIndex].URL, hpcPlacement.Message[resIndex].Location)
+		location, err := findHEAppELocation(ctx, cfg, hpcPlacement.Message[resIndex].URL,
+			hpcPlacement.Message[resIndex].Location, deploymentID)
 		if err != nil {
 			return cloudLocations, hpcLocations, err
 		}
@@ -364,7 +357,7 @@ func (o *ActionOperator) computeLocations(ctx context.Context, cfg config.Config
 
 }
 
-func findHEAppELocation(cfg config.Configuration, url, site string) (string, error) {
+func findHEAppELocation(ctx context.Context, cfg config.Configuration, url, site, deploymentID string) (string, error) {
 
 	var locationName string
 	locationMgr, err := locations.GetManager(cfg)
@@ -396,24 +389,25 @@ func findHEAppELocation(cfg config.Configuration, url, site string) (string, err
 		return locationName, err
 	}
 
+	var newLocationConfig locations.LocationConfiguration
 	if sameSiteLocationConfig.Name != "" {
-		// Adding a new location
-		sameSiteLocationConfig.Name = sameSiteLocationConfig.Name + "-" + path.Base(url)
-		sameSiteLocationConfig.Properties.Set("url", url)
-
-		err = locationMgr.CreateLocation(sameSiteLocationConfig)
-
-		return sameSiteLocationConfig.Name, err
+		newLocationConfig = sameSiteLocationConfig
+		newLocationConfig.Name = sameSiteLocationConfig.Name + "-" + path.Base(url)
+		newLocationConfig.Properties.Set("url", url)
+	} else if sameTypeLocationConfig.Name != "" {
+		newLocationConfig = sameTypeLocationConfig
+		newLocationConfig.Name = site + "_" + path.Base(url)
+		newLocationConfig.Properties.Set("url", url)
 	}
 
-	if sameTypeLocationConfig.Name != "" {
+	if newLocationConfig.Name != "" {
 		// Adding a new location
-		sameTypeLocationConfig.Name = site + "_" + path.Base(url)
-		sameTypeLocationConfig.Properties.Set("url", url)
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).Registerf(
+			"Creating new HEAppE location %s for URL %s", newLocationConfig.Name, url)
+		log.Printf("Creating new HEAppE location %s for URL %s", newLocationConfig.Name, url)
+		err = locationMgr.CreateLocation(newLocationConfig)
 
-		err = locationMgr.CreateLocation(sameTypeLocationConfig)
-
-		return sameTypeLocationConfig.Name, err
+		return newLocationConfig.Name, err
 	}
 
 	return locationName, errors.Errorf("Found no HEAppE location")
@@ -594,7 +588,17 @@ func (o *ActionOperator) setHPCLocation(ctx context.Context, deploymentID, nodeN
 	if !ok {
 		return errors.Errorf("Found no property JobSpecification in Node Template %+v", nodeTemplate)
 	}
-	jobSpecMap := jobSpecVal.GetMap()
+	var jobSpecMap map[string]interface{}
+	if jobSpecVal.Type == tosca.ValueAssignmentLiteral {
+		err = json.Unmarshal([]byte(jobSpecVal.GetLiteral()), &jobSpecMap)
+		if err != nil {
+			return errors.Wrapf(err, "Failed to unmarshal HEAppE job from string %s", jobSpecVal.GetLiteral())
+		}
+	} else if jobSpecVal.Type == tosca.ValueAssignmentMap {
+		jobSpecMap = jobSpecVal.GetMap()
+	} else {
+		return errors.Errorf("Expected a string or a map for HEAppE job, got %s value %s", jobSpecVal.String(), jobSpecVal.GetLiteral())
+	}
 	jobSpecMap["Project"] = location.Project
 
 	// Update the tasks

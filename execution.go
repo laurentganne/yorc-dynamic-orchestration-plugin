@@ -67,12 +67,12 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 		return nil, err
 	}
 	locationProps, err := locationMgr.GetLocationPropertiesForNode(ctx,
-		deploymentID, nodeName, bluInfrastructureType)
+		deploymentID, nodeName, damInfrastructureType)
 	if err != nil {
 		return exec, err
 	}
 	if len(locationProps) == 0 {
-		return exec, errors.Errorf("Found no location of type %s", bluInfrastructureType)
+		return exec, errors.Errorf("Found no location of type %s", damInfrastructureType)
 	}
 
 	// Getting an AAI client to check token validity
