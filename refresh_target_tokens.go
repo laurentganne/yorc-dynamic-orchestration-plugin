@@ -26,6 +26,7 @@ import (
 	"github.com/ystia/yorc/v4/deployments"
 	"github.com/ystia/yorc/v4/events"
 	"github.com/ystia/yorc/v4/locations"
+	"github.com/ystia/yorc/v4/log"
 	"github.com/ystia/yorc/v4/prov"
 	"github.com/ystia/yorc/v4/tosca"
 )
@@ -61,6 +62,7 @@ func (r *RefreshTargetTokens) Execute(ctx context.Context) error {
 		} else {
 			events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, r.DeploymentID).Registerf(
 				"Refreshing access token for target of %s: %s", r.NodeName, targetNodeName)
+			log.Printf("RefreshTargetTokens component asks to refresh token for deployment %s\n", r.DeploymentID)
 			aaiClient := getAAIClient(r.DeploymentID, locationProps)
 			var accessToken string
 			accessToken, _, err = aaiClient.RefreshToken(ctx)

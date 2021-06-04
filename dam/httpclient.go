@@ -112,8 +112,9 @@ func (c *httpclient) doRequest(method, path string, expectedStatuses []int, toke
 			}
 		}
 		if !foundExpectedStatus {
-			err = errors.Errorf("Expected HTTP Status code in %v, got %d, reason %q",
-				expectedStatuses, response.StatusCode, response.Status)
+			body, _ := ioutil.ReadAll(response.Body)
+			err = errors.Errorf("Expected HTTP Status code in %v, got %d, reason %q, body %q",
+				expectedStatuses, response.StatusCode, response.Status, string(body))
 			if strings.Contains(response.Status, invalidTokenError) && !tokenRefreshed {
 				newToken, err = c.refreshTokenFunc()
 				tokenRefreshed = true

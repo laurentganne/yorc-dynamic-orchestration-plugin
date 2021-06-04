@@ -146,6 +146,7 @@ func newExecution(ctx context.Context, cfg config.Configuration, taskID, deploym
 	}
 
 	if !valid {
+		log.Printf("Dynamic Orchestration plugin requests to refresh token for deployment %s\n", deploymentID)
 		_, _, err = aaiClient.RefreshToken(ctx)
 		if err != nil {
 			return exec, errors.Wrapf(err, "Failed to refresh token for orchestrator")
@@ -221,6 +222,7 @@ func getAAIClient(deploymentID string, locationProps config.DynamicMap) yorcoidc
 // refreshToken refreshes an access token
 func refreshToken(ctx context.Context, locationProps config.DynamicMap, deploymentID string) (string, string, error) {
 
+	log.Printf("Dynamic Allocator Module asks to refresh token for deployment %s\n", deploymentID)
 	aaiClient := getAAIClient(deploymentID, locationProps)
 	// Getting an AAI client to check token validity
 	accessToken, newRefreshToken, err := aaiClient.RefreshToken(ctx)
