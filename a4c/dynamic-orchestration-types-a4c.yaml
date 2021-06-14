@@ -2,14 +2,14 @@ tosca_definitions_version: alien_dsl_2_0_0
 
 metadata:
   template_name: org.lexis.common.dynamic-orchestration-types
-  template_version: 0.1.0
+  template_version: 1.0.0
   template_author: lexis
 
 description: Dynamic orchestration types
 
 imports:
   - org.lexis.common.heappe-types:1.0.6
-  - org.lexis.common.ddi-types:0.1.4
+  - org.lexis.common.ddi-types:1.0.0
 data_types:
   org.lexis.common.dynamic.orchestration.types.CloudRequirement:
     derived_from: tosca.datatypes.Root
@@ -117,15 +117,19 @@ data_types:
         required: false
   org.lexis.common.dynamic.orchestration.types.HPCLocation:
     derived_from: tosca.datatypes.Root
-    description: Location and properties to use to allocate a compute instance
+    description: Location and properties to use to allocate a job
     properties:
       location_name:
         type: string
-        description: Location where to allocate the compute instance
+        description: Location where to allocate the job
         required: false
       project_name:
         type: string
         description: HPC project name
+        required: false
+      cluster_id:
+        type: integer
+        description: HEAppE cluster identifier
         required: false
       tasks_location:
         type: map
