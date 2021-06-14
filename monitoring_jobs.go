@@ -268,7 +268,7 @@ func (o *ActionOperator) computeLocations(ctx context.Context, cfg config.Config
 		distrib := strings.ToLower(req.OSDistribution)
 		if distrib == "centos" {
 			user = "centos"
-		} else if distrib == "windows" {
+		} else if strings.ToLower(req.OSType) == "windows" {
 			user = "Admin"
 		}
 
@@ -322,6 +322,7 @@ func (o *ActionOperator) computeLocations(ctx context.Context, cfg config.Config
 		hpcLocations[nodeName] = HPCLocation{
 			Name:          location,
 			Project:       hpcPlacement.Message[resIndex].Project,
+			ClusterID:     hpcPlacement.Message[resIndex].ClusterID,
 			TasksLocation: tasksLocations,
 		}
 
@@ -600,6 +601,7 @@ func (o *ActionOperator) setHPCLocation(ctx context.Context, deploymentID, nodeN
 		return errors.Errorf("Expected a string or a map for HEAppE job, got %s value %s", jobSpecVal.String(), jobSpecVal.GetLiteral())
 	}
 	jobSpecMap["Project"] = location.Project
+	jobSpecMap["ClusterId"] = location.ClusterID
 
 	// Update the tasks
 	tasksVal, ok := jobSpecMap["Tasks"]

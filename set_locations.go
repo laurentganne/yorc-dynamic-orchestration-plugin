@@ -141,6 +141,7 @@ type TaskLocation struct {
 type HPCLocation struct {
 	Name          string                  `json:"location_name"`
 	Project       string                  `json:"project_name"`
+	ClusterID     int                     `json:"cluster_id"`
 	TasksLocation map[string]TaskLocation `json:"tasks_location"`
 }
 
@@ -322,7 +323,7 @@ func (e *SetLocationsExecution) submitComputeBestLocationRequest(ctx context.Con
 		}
 
 		if submittedReq.Status != dam.RequestStatusOK {
-			return errors.Errorf("Got response %v for Cloud placement request %+s", submittedReq, string(reqVal))
+			return errors.Errorf("Got response %s for Cloud placement request %v", string(reqVal), submittedReq)
 		}
 		requestID = submittedReq.RequestID
 		requestType = requestTypeCloud
